@@ -1,6 +1,8 @@
 import localforage from "localforage";
 import type { SyncHistoryEntry, SyncRecord } from "./types";
 
+type Store = ReturnType<typeof localforage.createInstance>;
+
 // ─── Store Factories ──────────────────────────────────────────────────────────
 
 const makeRecordsStore = (vaultName: string) =>
@@ -20,8 +22,8 @@ const makeHistoryStore = (vaultName: string) =>
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export class LocalDB {
-  private records: LocalForage;
-  private history: LocalForage;
+  private records: Store;
+  private history: Store;
 
   constructor(vaultName: string) {
     this.records = makeRecordsStore(vaultName);

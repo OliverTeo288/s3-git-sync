@@ -1,6 +1,7 @@
 import { App, Notice, Platform, PluginSettingTab, Setting } from "obsidian";
 import { SSOSessionExpiredError, validateAccessKeyId } from "./s3client";
 import type S3GitSyncPlugin from "./main";
+import type { AuthMethod } from "./types";
 
 export class S3GitSyncSettingTab extends PluginSettingTab {
   plugin: S3GitSyncPlugin;
@@ -15,30 +16,28 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     // ── Authentication method ─────────────────────────────────────────────────
-    containerEl.createEl("h2", { text: "S3 Authentication" });
+    new Setting(containerEl).setName("S3 authentication").setHeading();
 
     // Security notice
     const securityBanner = containerEl.createDiv("s3sync-settings-banner");
     securityBanner.createEl("strong", { text: "Security: " });
     securityBanner.appendText(
       "Static credentials are stored in your vault's plugin data (data.json). " +
-        "For production use or shared machines, prefer the AWS Named Profile method — " +
+        "For production use or shared machines, prefer the AWS named profile method — " +
         "credentials remain in the OS credential store and are never written to disk by this plugin."
     );
-
-    let authMethodSetting: Setting;
 
     new Setting(containerEl)
       .setName("Authentication method")
       .setDesc("How this plugin authenticates to AWS S3.")
       .addDropdown((d) => {
-        d.addOption("static", "Access Key & Secret (stored in plugin)");
+        d.addOption("static", "Access key & secret (stored in plugin)");
         if (Platform.isDesktop) {
-          d.addOption("profile", "AWS Named Profile (~/.aws/credentials)");
+          d.addOption("profile", "AWS named profile (~/.aws/credentials)");
         }
         d.setValue(this.plugin.settings.s3.authMethod)
-          .onChange(async (v: any) => {
-            this.plugin.settings.s3.authMethod = v;
+          .onChange(async (v) => {
+            this.plugin.settings.s3.authMethod = v as AuthMethod;
             await this.plugin.saveSettings();
             // Re-render to show/hide the relevant credential fields
             this.display();
@@ -54,7 +53,7 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
     }
 
     // ── Common S3 settings ────────────────────────────────────────────────────
-    containerEl.createEl("h2", { text: "S3 Bucket" });
+    new Setting(containerEl).setName("S3 bucket").setHeading();
 
     new Setting(containerEl)
       .setName("Bucket name")
@@ -71,7 +70,7 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Region")
-      .setDesc("AWS region where the bucket lives, e.g. ap-southeast-1")
+      .setDesc("AWS region where the bucket lives, for example: ap-southeast-1")
       .addText((t) =>
         t
           .setPlaceholder("us-east-1")
@@ -129,7 +128,7 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Force path-style URLs")
-      .setDesc("Enable for MinIO and other self-hosted S3 implementations that require path-style URLs (e.g. https://host/bucket/key).")
+      .setDesc("Enable for MinIO and other self-hosted S3 implementations that require path-style URLs, for example: https://host/bucket/key.")
       .addToggle((t) =>
         t.setValue(this.plugin.settings.s3.forcePathStyle).onChange(async (v) => {
           this.plugin.settings.s3.forcePathStyle = v;
@@ -154,7 +153,7 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
                 15_000
               );
             } else {
-              const msg = (err as Record<string, unknown>)?.["message"] as string | undefined ?? String(err);
+              const msg = err instanceof Error ? err.message : String(err);
               new Notice(`❌ ${msg}`, 10_000);
             }
           } finally {
@@ -164,15 +163,16 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
       );
 
     // ── Ignore patterns ───────────────────────────────────────────────────────
-    containerEl.createEl("h2", { text: "Ignore Patterns" });
+    new Setting(containerEl).setName("Ignore patterns").setHeading();
     containerEl.createEl("p", {
       cls: "setting-item-description",
       text: "Vault-relative paths to exclude from sync. One entry per line. Supports * and ? wildcards.",
     });
 
+    const configDir = this.app.vault.configDir;
     new Setting(containerEl).addTextArea((t) => {
       t.setPlaceholder(
-        ".obsidian/workspace.json\n.obsidian/workspace-mobile.json\n*.tmp"
+        `${configDir}/workspace.json\n${configDir}/workspace-mobile.json\n*.tmp`
       )
         .setValue(this.plugin.settings.ignorePatterns.join("\n"))
         .onChange(async (v) => {
@@ -183,11 +183,11 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         });
       t.inputEl.rows = 6;
-      t.inputEl.style.width = "100%";
+      t.inputEl.addClass("s3sync-ignore-textarea");
     });
 
     // ── Interface ─────────────────────────────────────────────────────────────
-    containerEl.createEl("h2", { text: "Interface" });
+    new Setting(containerEl).setName("Interface").setHeading();
 
     new Setting(containerEl)
       .setName("Show status bar")
@@ -200,7 +200,7 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
       );
 
     // ── Danger zone ───────────────────────────────────────────────────────────
-    containerEl.createEl("h2", { text: "Advanced" });
+    new Setting(containerEl).setName("Advanced").setHeading();
 
     new Setting(containerEl)
       .setName("Reset sync state")
@@ -215,7 +215,7 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
           if (!confirmPending) {
             confirmPending = true;
             btn.setButtonText("Click again to confirm");
-            setTimeout(() => {
+            activeWindow.setTimeout(() => {
               if (confirmPending) {
                 confirmPending = false;
                 btn.setButtonText("Reset");
@@ -234,16 +234,17 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
   // ─── Auth-method panels ───────────────────────────────────────────────────
 
   private renderStaticCredentials(container: HTMLElement) {
+    const configDir = this.app.vault.configDir;
     const note = container.createDiv("s3sync-settings-auth-note");
     note.createEl("p", {
       text:
-        "Credentials are saved in .obsidian/plugins/s3-git-sync/data.json. " +
+        `Credentials are saved in ${configDir}/plugins/s3-git-sync/data.json. ` +
         "A .gitignore entry for data.json is automatically created to prevent accidental commits. " +
         "Avoid this method on shared or multi-user machines.",
     });
 
     new Setting(container)
-      .setName("Access Key ID")
+      .setName("Access key ID")
       .setDesc("Starts with AKIA (long-term) or ASIA (temporary session).")
       .addText((t) => {
         t.setPlaceholder("AKIAIOSFODNN7EXAMPLE")
@@ -261,7 +262,7 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
       });
 
     new Setting(container)
-      .setName("Secret Access Key")
+      .setName("Secret access key")
       .addText((t) => {
         t.setPlaceholder("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
           .setValue(this.plugin.settings.s3.s3SecretAccessKey)

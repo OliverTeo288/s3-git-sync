@@ -131,7 +131,7 @@ Click **Test connection** to verify everything is wired up.
 
 ### View Changes (the main workflow)
 
-Click the refresh icon in the ribbon, or run **S3 Git Sync: View Changes** from the command palette.
+Click the refresh icon in the ribbon, or run **S3 Git Sync: View changes (Git status)** from the command palette.
 
 The modal shows all pending changes:
 
@@ -154,7 +154,7 @@ For text files in the Modified sections, click **▶ diff** to see a line-by-lin
 Syncs everything except conflicts without opening the modal. Useful as a hotkey for a quick catch-up sync.
 
 ```
-S3 Git Sync: Quick Sync (all changes, default resolutions)
+S3 Git Sync: Quick sync (all changes, default resolutions)
 ```
 
 ### Push / Pull
@@ -171,7 +171,7 @@ Conflicts in push are resolved local-wins. Conflicts in pull are resolved remote
 ### Sync History
 
 ```
-S3 Git Sync: View Sync History (git log)
+S3 Git Sync: View sync history (Git log)
 ```
 
 Shows the last 50 sync operations with timestamps, optional messages, and per-sync stats (↑ uploaded, ↓ downloaded, ✕ deleted, ⚠ conflicts, ⛔ errors).
@@ -308,9 +308,12 @@ src/
   settings.ts      PluginSettingTab
   types.ts         All shared types and interfaces
 tests/
-  differ.test.ts
-  syncEngine.test.ts
-  __mocks__/       Obsidian and localforage stubs for unit tests
+  differ.test.ts        3-way diff engine, ignore patterns, content-hash de-dup
+  syncEngine.test.ts    dryRunStats, validateAccessKeyId, S3ClientWrapper prefix
+  localdb.test.ts       LocalDB upsert / get / delete / history pruning
+  s3client.test.ts      errorCode classifier, parseAWSConfigForSSO
+  integration/          S3 + full-sync scenarios against LocalStack
+  __mocks__/            Obsidian and localforage stubs for unit tests
 ```
 
 ### Local development

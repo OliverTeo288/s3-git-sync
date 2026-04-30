@@ -1,19 +1,66 @@
-import type { Vault } from "obsidian";
+import { Platform, type Vault } from "obsidian";
 import type { LocalDB } from "./localdb";
 import type { S3ClientWrapper } from "./s3client";
-import type { FileChange, RemoteObject, S3Config, S3GitSyncSettings } from "./types";
+import type { FileChange, RemoteObject, S3GitSyncSettings } from "./types";
 
 // ─── Pattern Matching ─────────────────────────────────────────────────────────
 
+const patternCache = new Map<string, RegExp>();
+
 function matchesPattern(path: string, pattern: string): boolean {
-  // Support simple glob wildcards (* and ?)
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  const regexStr = escaped.replace(/\*/g, ".*").replace(/\?/g, ".");
-  return new RegExp(`^${regexStr}$`).test(path);
+  let re = patternCache.get(pattern);
+  if (!re) {
+    const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    re = new RegExp(`^${escaped.replace(/\*/g, ".*").replace(/\?/g, ".")}$`);
+    patternCache.set(pattern, re);
+  }
+  return re.test(path);
 }
 
 function isIgnored(path: string, patterns: string[]): boolean {
   return patterns.some((p) => matchesPattern(path, p));
+}
+
+// ─── Content hashing (S3 ETag compatibility) ─────────────────────────────────
+// S3 returns the lowercase hex MD5 of the object body as the ETag for
+// single-PUT (non-multipart) uploads. Multipart uploads use a different
+// scheme and have a "-N" suffix where N is the part count — we skip those.
+
+function isMultipartEtag(etag: string): boolean {
+  return etag.replace(/"/g, "").includes("-");
+}
+
+type CryptoModule = {
+  createHash: (alg: string) => {
+    update: (buf: Uint8Array) => { digest: (enc: string) => string };
+  };
+};
+
+async function loadCrypto(): Promise<CryptoModule | null> {
+  // Electron desktop renderer: CommonJS require is on globalThis.
+  // eslint-disable-next-line obsidianmd/prefer-active-doc -- accessing Electron's CommonJS require, not the document
+  const rq = (globalThis as Record<string, unknown>)["require"];
+  if (typeof rq === "function") {
+    try { return (rq as (id: string) => unknown)("crypto") as CryptoModule; }
+    catch { /* fall through */ }
+  }
+  // Node ESM (vitest unit tests): dynamic import. `node:*` is marked
+  // external in esbuild.config.mjs so this stays untouched at bundle
+  // time, and the whole loadCrypto call is guarded by Platform.isDesktop.
+  // eslint-disable-next-line obsidianmd/no-nodejs-modules -- desktop-only fallback path; mobile is short-circuited above via Platform.isDesktop
+  try { return await import("node:crypto"); }
+  catch { return null; }
+}
+
+async function computeMd5Hex(data: ArrayBuffer): Promise<string | null> {
+  if (!Platform.isDesktop) return null; // mobile has no Node.js crypto
+  const crypto = await loadCrypto();
+  if (!crypto) return null;
+  try {
+    return crypto.createHash("md5").update(new Uint8Array(data)).digest("hex");
+  } catch {
+    return null;
+  }
 }
 
 // ─── Diff Engine ──────────────────────────────────────────────────────────────
@@ -38,7 +85,7 @@ export async function computeChanges(
   db: LocalDB,
   settings: S3GitSyncSettings
 ): Promise<DiffResult> {
-  const ignorePatterns = settings.ignorePatterns ?? [];
+  const ignorePatterns = settings.ignorePatterns;
 
   // 1. Gather local files
   const localFiles = vault.getFiles().filter((f) => !isIgnored(f.path, ignorePatterns));
@@ -71,77 +118,93 @@ export async function computeChanges(
 
     if (synced) {
       // ── We've synced this file before ──────────────────────────────────────
-      const localMissing = !local;
-      const remoteMissing = !remote;
-
-      if (localMissing && remoteMissing) {
-        // Both sides deleted — clean up the orphaned record
-        await db.deleteSyncRecord(key);
-        continue;
-      }
-
-      if (localMissing) {
+      if (!local) {
+        if (!remote) {
+          // Both sides deleted — clean up the orphaned record
+          await db.deleteSyncRecord(key);
+          continue;
+        }
         // Deleted locally; remote still exists → remove from S3
         changes.push({
           key,
           s3Key,
           changeType: "local_deleted",
-          remoteMtime: remote!.lastModified,
-          remoteSize: remote!.size,
-          remoteEtag: remote!.etag,
+          remoteMtime: remote.lastModified,
+          remoteSize: remote.size,
+          remoteEtag: remote.etag,
         });
         continue;
       }
 
-      if (remoteMissing) {
+      if (!remote) {
         // Deleted from S3; local still exists → remove locally
         changes.push({
           key,
           s3Key,
           changeType: "remote_deleted",
-          localMtime: local!.stat.mtime,
-          localSize: local!.stat.size,
+          localMtime: local.stat.mtime,
+          localSize: local.stat.size,
         });
         continue;
       }
 
       // Both exist — check if either side changed
       // 1s tolerance on mtime to avoid false positives from filesystem resolution differences
-      const localChanged = local!.stat.mtime > synced.localMtime + 1000;
-      const remoteChanged = remote!.etag !== synced.etag;
+      let localChanged = local.stat.mtime > synced.localMtime + 1000;
+      const remoteChanged = remote.etag !== synced.etag;
+
+      // mtime can change without the content changing (e.g. user opened the
+      // file, Obsidian re-saved on close, or a file-system tool touched it).
+      // If the size is unchanged AND the remote ETag is a plain MD5 (not a
+      // multipart hash-of-hashes), verify by hashing the local content. When
+      // the hash matches the synced ETag, silently update the record's mtime
+      // so we don't keep flagging the same touch on every diff run.
+      if (
+        localChanged &&
+        !remoteChanged &&
+        local.stat.size === synced.localSize &&
+        !isMultipartEtag(synced.etag)
+      ) {
+        const data = await vault.adapter.readBinary(local.path);
+        const md5 = await computeMd5Hex(data);
+        if (md5 && md5 === synced.etag.replace(/"/g, "")) {
+          await db.upsertSyncRecord({ ...synced, localMtime: local.stat.mtime });
+          localChanged = false;
+        }
+      }
 
       if (localChanged && remoteChanged) {
         changes.push({
           key,
           s3Key,
           changeType: "conflict",
-          localMtime: local!.stat.mtime,
-          localSize: local!.stat.size,
-          remoteMtime: remote!.lastModified,
-          remoteSize: remote!.size,
-          remoteEtag: remote!.etag,
+          localMtime: local.stat.mtime,
+          localSize: local.stat.size,
+          remoteMtime: remote.lastModified,
+          remoteSize: remote.size,
+          remoteEtag: remote.etag,
         });
       } else if (localChanged) {
         changes.push({
           key,
           s3Key,
           changeType: "local_modified",
-          localMtime: local!.stat.mtime,
-          localSize: local!.stat.size,
-          remoteMtime: remote!.lastModified,
-          remoteSize: remote!.size,
-          remoteEtag: remote!.etag,
+          localMtime: local.stat.mtime,
+          localSize: local.stat.size,
+          remoteMtime: remote.lastModified,
+          remoteSize: remote.size,
+          remoteEtag: remote.etag,
         });
       } else if (remoteChanged) {
         changes.push({
           key,
           s3Key,
           changeType: "remote_modified",
-          localMtime: local!.stat.mtime,
-          localSize: local!.stat.size,
-          remoteMtime: remote!.lastModified,
-          remoteSize: remote!.size,
-          remoteEtag: remote!.etag,
+          localMtime: local.stat.mtime,
+          localSize: local.stat.size,
+          remoteMtime: remote.lastModified,
+          remoteSize: remote.size,
+          remoteEtag: remote.etag,
         });
       }
       // else: identical on both sides → nothing to do

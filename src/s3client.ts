@@ -27,7 +27,8 @@ const ACCESS_KEY_RE = /^(AKIA|ASIA|AROA|AIDA)[0-9A-Z]{16}$/;
 // modules at runtime inside Obsidian desktop (Electron).  This helper avoids
 // TypeScript errors while being explicit about the runtime requirement.
 
-function nodeRequire(id: string): any {
+function nodeRequire(id: string): unknown {
+  // eslint-disable-next-line obsidianmd/prefer-active-doc -- accessing Electron's CommonJS require, not the document
   const rq = (globalThis as Record<string, unknown>)["require"];
   if (typeof rq !== "function") throw new Error(`require("${id}") is not available outside Electron.`);
   return (rq as (id: string) => unknown)(id);
@@ -49,9 +50,17 @@ export const EC = {
   UNKNOWN:           "S3S-E99",
 } as const;
 
+function errorField(err: unknown, key: "name" | "message"): string {
+  if (err && typeof err === "object") {
+    const v = (err as Record<string, unknown>)[key];
+    if (typeof v === "string") return v;
+  }
+  return "";
+}
+
 export function errorCode(err: unknown): string {
-  const name = String((err as Record<string, unknown>)?.["name"] ?? "");
-  const msg  = String((err as Record<string, unknown>)?.["message"] ?? "").toLowerCase();
+  const name = errorField(err, "name");
+  const msg  = errorField(err, "message").toLowerCase();
   if (name === "NoSuchBucket")                                           return EC.NOT_FOUND;
   if (name === "AccessDenied" || name === "Forbidden"
       || msg.includes("access denied") || msg.includes("forbidden"))    return EC.ACCESS_DENIED;
@@ -73,15 +82,15 @@ export function errorCode(err: unknown): string {
  */
 export class SSOSessionExpiredError extends Error {
   readonly ssoStartUrl: string | null;
+  readonly profileName: string;
 
-  constructor(ssoStartUrl: string | null, cause?: unknown) {
+  constructor(ssoStartUrl: string | null, profileName: string, cause?: unknown) {
     super(
-      ssoStartUrl
-        ? "AWS SSO session expired — opening browser to re-authenticate…"
-        : "AWS SSO session expired. Run `aws sso login` in your terminal to re-authenticate."
+      `AWS SSO session expired. Run \`aws sso login --profile ${profileName}\` in your terminal, then retry.`
     );
     this.name = "SSOSessionExpiredError";
     this.ssoStartUrl = ssoStartUrl;
+    this.profileName = profileName;
     if (cause != null) (this as Record<string, unknown>)["cause"] = cause;
   }
 }
@@ -114,9 +123,8 @@ function redactCredentials(msg: string, cfg: S3Config): string {
 /** Detect errors that indicate an expired or missing SSO token. */
 function isSSOExpiredError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
-  const e = err as Record<string, unknown>;
-  const name = String(e["name"] ?? "");
-  const msg = String(e["message"] ?? "").toLowerCase();
+  const name = errorField(err, "name");
+  const msg = errorField(err, "message").toLowerCase();
   return (
     name === "SSOTokenProviderFailure" ||
     name === "ExpiredTokenException" ||
@@ -137,12 +145,12 @@ function isSSOExpiredError(err: unknown): boolean {
 export function parseAWSConfigForSSO(profileName: string): string | null {
   if (!Platform.isDesktop) return null;
   try {
-    const os = nodeRequire("os") as { homedir(): string };
+    const os = nodeRequire("os") as { homedir: () => string };
     const fs = nodeRequire("fs") as {
-      existsSync(p: string): boolean;
-      readFileSync(p: string, enc: string): string;
+      existsSync: (p: string) => boolean;
+      readFileSync: (p: string, enc: string) => string;
     };
-    const nodePath = nodeRequire("path") as { join(...parts: string[]): string };
+    const nodePath = nodeRequire("path") as { join: (...parts: string[]) => string };
 
     const configPath = nodePath.join(os.homedir(), ".aws", "config");
     if (!fs.existsSync(configPath)) return null;
@@ -215,11 +223,11 @@ export function launchSSOLogin(profileName: string, onUrl?: SSOLoginCallback): b
   if (!Platform.isDesktop) return false;
   try {
     const cp = nodeRequire("child_process") as {
-      spawn(cmd: string, args: string[], opts: object): {
-        stdout: { on(event: "data", cb: (chunk: Buffer) => void): void };
-        stderr: { on(event: "data", cb: (chunk: Buffer) => void): void };
-        on(event: "close", cb: () => void): void;
-        unref(): void;
+      spawn: (cmd: string, args: string[], opts: object) => {
+        stdout: { on: (event: "data", cb: (chunk: { toString: () => string }) => void) => void };
+        stderr: { on: (event: "data", cb: (chunk: { toString: () => string }) => void) => void };
+        on: (event: "close", cb: () => void) => void;
+        unref: () => void;
       };
     };
 
@@ -238,14 +246,15 @@ export function launchSSOLogin(profileName: string, onUrl?: SSOLoginCallback): b
 
     // Fallback: if the subprocess hasn't emitted a URL after 15 s, open the
     // SSO start URL straight from ~/.aws/config so the user isn't left waiting.
-    const fallback = setTimeout(() => {
+    const fallback = activeWindow.setTimeout(() => {
       if (urlFound) return;
       const startUrl = parseAWSConfigForSSO(profileName || "default");
       if (startUrl) { urlFound = true; onUrl?.({ url: startUrl }); }
     }, 15_000);
 
-    const handleChunk = (chunk: Buffer) => {
-      // Strip ANSI colour codes before parsing
+    const handleChunk = (chunk: { toString: () => string }) => {
+      // Strip ANSI colour codes before parsing.
+      // eslint-disable-next-line no-control-regex -- ESC byte is required to match terminal escape sequences
       accum += chunk.toString().replace(/\x1b\[[0-9;]*[mGKHF]/g, "");
       if (urlFound) return;
 
@@ -253,7 +262,7 @@ export function launchSSOLogin(profileName: string, onUrl?: SSOLoginCallback): b
       if (!urlMatch) return;
 
       urlFound = true;
-      clearTimeout(fallback);
+      activeWindow.clearTimeout(fallback);
       const url = urlMatch[0].replace(/[.,;:)\]'"]+$/, "").trim();
       const codeMatch = accum.match(/(?:enter the code|user[_ ]code)[:\s]+([A-Z]{4}-[A-Z]{4})/i);
       onUrl?.({ url, code: codeMatch?.[1] });
@@ -261,7 +270,7 @@ export function launchSSOLogin(profileName: string, onUrl?: SSOLoginCallback): b
 
     proc.stdout.on("data", handleChunk);
     proc.stderr.on("data", handleChunk);
-    proc.on("close", () => clearTimeout(fallback));
+    proc.on("close", () => activeWindow.clearTimeout(fallback));
     proc.unref();
     return true;
   } catch {
@@ -275,10 +284,11 @@ export function launchSSOLogin(profileName: string, onUrl?: SSOLoginCallback): b
  */
 function rethrowMapped(err: unknown, cfg: S3Config): never {
   if (cfg.authMethod === "profile" && isSSOExpiredError(err)) {
-    const url = parseAWSConfigForSSO(cfg.s3ProfileName || "default");
-    throw new SSOSessionExpiredError(url, err);
+    const profileName = cfg.s3ProfileName || "default";
+    const url = parseAWSConfigForSSO(profileName);
+    throw new SSOSessionExpiredError(url, profileName, err);
   }
-  const rawMsg = (err as Record<string, unknown>)?.["message"] as string | undefined ?? String(err);
+  const rawMsg = err instanceof Error ? err.message : errorField(err, "message") || String(err);
   const code = errorCode(err);
   throw new Error(`[${code}] ${redactCredentials(rawMsg, cfg)}`);
 }
@@ -323,7 +333,7 @@ function getContentType(filename: string): string {
 function makeTimeoutPromise(ms: number | undefined): Promise<never> {
   return new Promise<never>((_, reject) => {
     if (ms == null) return; // never settles → no-op in Promise.race
-    setTimeout(() => {
+    activeWindow.setTimeout(() => {
       const e = new Error(`Request timed out after ${ms}ms`);
       e.name = "TimeoutError";
       reject(e);
@@ -357,7 +367,7 @@ class ObsHttpHandler extends FetchHttpHandler {
 
     const { port, method } = request;
     const url = `${request.protocol}//${request.hostname}${port ? `:${port}` : ""}${reqPath}`;
-    const rawBody = method === "GET" || method === "HEAD" ? undefined : request.body;
+    const rawBody: unknown = method === "GET" || method === "HEAD" ? undefined : request.body;
 
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(request.headers)) {
@@ -397,7 +407,7 @@ class ObsHttpHandler extends FetchHttpHandler {
       };
     });
 
-    const races: Promise<{ response: HttpResponse } | never>[] = [requestPromise, makeTimeoutPromise(this.timeoutMs)];
+    const races: Promise<{ response: HttpResponse }>[] = [requestPromise, makeTimeoutPromise(this.timeoutMs)];
     if (abortSignal) {
       races.push(
         new Promise<never>((_, reject) => {

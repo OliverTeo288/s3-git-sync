@@ -1,6 +1,6 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Modal, Notice, TFile } from "obsidian";
 import type { LocalDB } from "./localdb";
-import type { S3ClientWrapper } from "./s3client";
+import { SSOSessionExpiredError, type S3ClientWrapper } from "./s3client";
 import { type ProgressCallback, executeSync } from "./syncEngine";
 import type { FileChange, S3GitSyncSettings, SyncHistoryEntry, SyncStats } from "./types";
 import type { Vault } from "obsidian";
@@ -121,6 +121,43 @@ function formatAge(mtime: number | Date | undefined): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+/**
+ * Returns the deepest 2 folder segments of a path, prefixed with `…/`
+ * if there are more above. Keeps the most informative part visible
+ * even on narrow modals — the immediate parent folder is what users
+ * actually look at to disambiguate "Notes/foo.md" from "Archive/foo.md".
+ */
+function shortenDir(parts: string[]): string {
+  const dirs = parts.slice(0, -1);
+  if (dirs.length === 0) return "";
+  if (dirs.length <= 2) return dirs.join("/") + "/";
+  return "…/" + dirs.slice(-2).join("/") + "/";
+}
+
+/**
+ * Open the given vault path in a new tab if it exists locally. Returns
+ * `true` on success — used by the change-view rows to gate the click affordance
+ * (remote-only files have no local TFile yet and aren't clickable).
+ */
+async function openInVault(app: App, key: string): Promise<boolean> {
+  const file = app.vault.getAbstractFileByPath(key);
+  if (!(file instanceof TFile)) return false;
+  await app.workspace.getLeaf("tab").openFile(file);
+  return true;
+}
+
+/** Add a click handler that opens `key` in Obsidian, plus a clickable affordance class. */
+function makePathClickable(el: HTMLElement, app: App, key: string): void {
+  if (!(app.vault.getAbstractFileByPath(key) instanceof TFile)) return;
+  el.addClass("s3sync-file-clickable");
+  el.title = `${key}\n\nClick to open`;
+  el.onclick = async (e) => {
+    e.stopPropagation();
+    const opened = await openInVault(app, key);
+    if (!opened) new Notice("File no longer exists in vault.", 3000);
+  };
+}
+
 // ─── Change Preview Modal ─────────────────────────────────────────────────────
 
 export class ChangeViewModal extends Modal {
@@ -177,9 +214,22 @@ export class ChangeViewModal extends Modal {
       );
       contentEl.empty();
       this.render(contentEl);
-    } catch (err: any) {
+    } catch (err: unknown) {
       contentEl.empty();
-      contentEl.createDiv({ cls: "s3sync-error-banner", text: `Failed to compute changes: ${err?.message ?? err}` });
+      const banner = contentEl.createDiv({ cls: "s3sync-error-banner" });
+      if (err instanceof SSOSessionExpiredError) {
+        banner.createEl("strong", { text: "AWS SSO session expired" });
+        banner.createEl("p", {
+          text: "Run this in a terminal, then click Retry:",
+        });
+        banner.createEl("code", {
+          cls: "s3sync-error-cmd",
+          text: `aws sso login --profile ${err.profileName}`,
+        });
+      } else {
+        const msg = err instanceof Error ? err.message : String(err);
+        banner.setText(`Failed to compute changes: ${msg}`);
+      }
       const retryBtn = contentEl.createEl("button", { cls: "mod-cta s3sync-retry-btn", text: "Retry" });
       retryBtn.onclick = () => this.loadChanges();
     }
@@ -191,7 +241,7 @@ export class ChangeViewModal extends Modal {
 
     // ── Header ────────────────────────────────────────────────────────────────
     const header = root.createDiv("s3sync-header");
-    header.createEl("h2", { text: "S3 Changes" });
+    header.createEl("h2", { text: "S3 changes" });
 
     const stats = header.createDiv("s3sync-stats-row");
     if (grouped.localNew.length + grouped.localModified.length > 0) {
@@ -317,9 +367,11 @@ export class ChangeViewModal extends Modal {
       pathWrap.title = change.key;
       const parts = change.key.split("/");
       pathWrap.createSpan({ cls: "s3sync-file-name", text: parts[parts.length - 1] });
-      if (parts.length > 1) {
-        pathWrap.createSpan({ cls: "s3sync-file-dir", text: parts.slice(0, -1).join("/") + "/" });
+      const shortDir = shortenDir(parts);
+      if (shortDir) {
+        pathWrap.createSpan({ cls: "s3sync-file-dir", text: shortDir });
       }
+      makePathClickable(pathWrap, this.app, change.key);
 
       const meta = row.createSpan({ cls: "s3sync-file-meta" });
       if (change.localMtime || change.remoteMtime) {
@@ -341,7 +393,7 @@ export class ChangeViewModal extends Modal {
         panel.hide();
         let loaded = false;
 
-        const toggleBtn = row.createEl("button", { cls: "s3sync-diff-toggle", text: "▶ diff" });
+        const toggleBtn = row.createEl("button", { cls: "s3sync-diff-toggle", text: "▶ Diff" });
         toggleBtn.onclick = async (e) => {
           e.stopPropagation();
           if (!panel.isShown()) {
@@ -350,7 +402,7 @@ export class ChangeViewModal extends Modal {
             if (!loaded) { loaded = true; await this.loadAndRenderDiff(panel, change); }
           } else {
             panel.hide();
-            toggleBtn.setText("▶ diff");
+            toggleBtn.setText("▶ Diff");
           }
         };
       }
@@ -360,7 +412,7 @@ export class ChangeViewModal extends Modal {
 
   private renderConflictSection(parent: HTMLElement, conflicts: FileChange[]) {
     const section = parent.createDiv("s3sync-section s3sync-section-conflict");
-    section.createEl("h4", { text: "⚠️ Conflicts — Both sides changed" });
+    section.createEl("h4", { text: "⚠️ conflicts — both sides changed" });
     section.createEl("p", {
       cls: "s3sync-conflict-hint",
       text: "Both sides changed since last sync. Choose which version to keep for each file.",
@@ -384,9 +436,11 @@ export class ChangeViewModal extends Modal {
       cPathWrap.title = change.key;
       const cParts = change.key.split("/");
       cPathWrap.createSpan({ cls: "s3sync-file-name", text: cParts[cParts.length - 1] });
-      if (cParts.length > 1) {
-        cPathWrap.createSpan({ cls: "s3sync-file-dir", text: cParts.slice(0, -1).join("/") + "/" });
+      const shortCDir = shortenDir(cParts);
+      if (shortCDir) {
+        cPathWrap.createSpan({ cls: "s3sync-file-dir", text: shortCDir });
       }
+      makePathClickable(cPathWrap, this.app, change.key);
 
       const meta = info.createDiv("s3sync-conflict-meta");
       meta.createSpan({ text: `Local: ${formatAge(change.localMtime)}  ${formatSize(change.localSize)}` });
@@ -397,11 +451,11 @@ export class ChangeViewModal extends Modal {
 
       const localBtn = controls.createEl("button", {
         cls: `s3sync-conflict-btn ${defaultRes === "local" ? "active" : ""}`,
-        text: "Keep Local",
+        text: "Keep local",
       });
       const remoteBtn = controls.createEl("button", {
         cls: `s3sync-conflict-btn ${defaultRes === "remote" ? "active" : ""}`,
-        text: "Keep Remote",
+        text: "Keep remote",
       });
 
       localBtn.onclick = () => {
@@ -420,7 +474,7 @@ export class ChangeViewModal extends Modal {
         panel.hide();
         let loaded = false;
 
-        const toggleBtn = controls.createEl("button", { cls: "s3sync-diff-toggle", text: "▶ diff" });
+        const toggleBtn = controls.createEl("button", { cls: "s3sync-diff-toggle", text: "▶ Diff" });
         toggleBtn.onclick = async (e) => {
           e.stopPropagation();
           if (!panel.isShown()) {
@@ -429,7 +483,7 @@ export class ChangeViewModal extends Modal {
             if (!loaded) { loaded = true; await this.loadAndRenderDiff(panel, change); }
           } else {
             panel.hide();
-            toggleBtn.setText("▶ diff");
+            toggleBtn.setText("▶ Diff");
           }
         };
       }
@@ -504,9 +558,10 @@ export class ChangeViewModal extends Modal {
           el.createSpan({ cls: "s3sync-diff-text", text: line.text || " " });
         }
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       loading.remove();
-      panel.createDiv({ cls: "s3sync-diff-error", text: `Failed to load diff: ${err?.message ?? err}` });
+      const msg = err instanceof Error ? err.message : String(err);
+      panel.createDiv({ cls: "s3sync-diff-error", text: `Failed to load diff: ${msg}` });
     }
   }
 
@@ -534,8 +589,9 @@ export class ChangeViewModal extends Modal {
         onProgress
       );
       this.showResult(stats);
-    } catch (err: any) {
-      new Notice(`S3 Sync error: ${err?.message ?? err}`, 8000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      new Notice(`S3 sync error: ${msg}`, 8000);
       this.syncBtn.disabled = false;
     }
   }
@@ -582,7 +638,7 @@ export class HistoryModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("s3sync-modal");
-    contentEl.createEl("h2", { text: "Sync History" });
+    contentEl.createEl("h2", { text: "Sync history" });
 
     const entries = await this.db.getHistory(50);
 

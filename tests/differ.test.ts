@@ -14,6 +14,12 @@ function mockVault(files: MockFile[]) {
         path: f.path,
         stat: { mtime: f.mtime, size: f.size },
       })),
+    adapter: {
+      // Return distinct bytes per call so the differ's MD5 check never
+      // matches a fake etag (the etags in these tests are strings like
+      // "etag1", not real MD5 hashes).
+      readBinary: async () => new TextEncoder().encode(`mock-${Math.random()}`).buffer,
+    },
   } as any;
 }
 
@@ -30,10 +36,13 @@ function mockS3(objects: Omit<RemoteObject, "s3Key">[], prefix = "") {
 
 function mockDB(records: SyncRecord[] = []) {
   const deleteSyncRecord = vi.fn(async () => {});
+  const upsertSyncRecord = vi.fn(async () => {});
   return {
     getAllSyncRecords: async () => new Map(records.map((r) => [r.key, r])),
     deleteSyncRecord,
+    upsertSyncRecord,
     _deleteMock: deleteSyncRecord,
+    _upsertMock: upsertSyncRecord,
   } as any;
 }
 
@@ -147,6 +156,29 @@ describe("computeChanges — with prior sync state", () => {
     const vault = mockVault([{ path: "c.md", mtime: 1_500, size: 512 }]);
     const s3 = mockS3([
       { vaultKey: "c.md", etag: "etag1", lastModified: new Date(500), size: 512 },
+    ]);
+    const db = mockDB([rec]);
+
+    const { changes } = await computeChanges(vault, s3, db, DEFAULT_SETTINGS);
+    expect(changes).toHaveLength(0);
+  });
+
+  it("does NOT flag local_modified when content hash matches synced ETag (touch-no-change)", async () => {
+    const content = new TextEncoder().encode("hello world").buffer;
+    // Real MD5 of "hello world": 5eb63bbbe01eeed093cb22bb8f5acdc3
+    const md5 = "5eb63bbbe01eeed093cb22bb8f5acdc3";
+    const rec = makeSyncRecord({
+      key: "touched.md",
+      etag: md5,
+      localMtime: 1_000,
+      localSize: content.byteLength,
+    });
+    const vault = {
+      getFiles: () => [{ path: "touched.md", stat: { mtime: 9_000, size: content.byteLength } }],
+      adapter: { readBinary: async () => content },
+    } as any;
+    const s3 = mockS3([
+      { vaultKey: "touched.md", etag: md5, lastModified: new Date(500), size: content.byteLength },
     ]);
     const db = mockDB([rec]);
 

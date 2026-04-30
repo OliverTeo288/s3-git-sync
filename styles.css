@@ -612,3 +612,33 @@
   color: var(--color-red);
   font-size: 0.88em;
 }
+
+/* Wide textarea for ignore patterns settings field */
+.s3sync-ignore-textarea {
+  width: 100%;
+}
+
+
+/* Copy-pasteable command shown inside an error banner (e.g. SSO re-auth instructions) */
+.s3sync-error-cmd {
+  display: block;
+  margin-top: 6px;
+  padding: 6px 10px;
+  background: var(--background-modifier-form-field);
+  border-radius: 4px;
+  font-family: var(--font-monospace);
+  font-size: 0.9em;
+  user-select: all;
+}
+
+
+/* Clickable file path in the change list — opens the file in Obsidian */
+.s3sync-file-clickable {
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+.s3sync-file-clickable:hover .s3sync-file-name {
+  color: var(--text-accent);
+  text-decoration: underline;
+}
+

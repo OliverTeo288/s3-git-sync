@@ -1,5 +1,5 @@
 import { nanoid } from "nanoid";
-import type { Vault } from "obsidian";
+import { TFile, type Vault } from "obsidian";
 import type { LocalDB } from "./localdb";
 import type { S3ClientWrapper } from "./s3client";
 import type {
@@ -25,12 +25,11 @@ export interface SyncOptions {
   message?: string;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Pure helpers ─────────────────────────────────────────────────────────────
 
 /** Returns a backup path like `conflict/Notes/file.conflict-2026-04-30-143022.md` */
 function makeBackupKey(key: string): string {
-  const now = new Date();
-  const stamp = now.toISOString()
+  const stamp = new Date().toISOString()
     .slice(0, 19)           // "2026-04-30T14:30:22"
     .replace("T", "-")      // "2026-04-30-14:30:22"
     .replace(/:/g, "");     // "2026-04-30-143022"
@@ -42,15 +41,97 @@ function makeBackupKey(key: string): string {
 }
 
 function shouldInclude(key: string, opts: SyncOptions): boolean {
-  if (!opts.selectedKeys) return true;
-  return opts.selectedKeys.has(key);
+  return !opts.selectedKeys || opts.selectedKeys.has(key);
 }
 
 function resolveConflict(key: string, opts: SyncOptions): "local" | "remote" {
-  // Always use the per-file resolution set in the change-view modal.
-  // Quick sync / auto sync pre-filter conflicts out before calling executeSync,
-  // so this path is only reached via the modal which always populates the map.
+  // Quick sync / auto sync pre-filter conflicts out, so this path is only
+  // reached via the change-view modal — which always populates the map.
   return opts.conflictResolutions?.get(key) ?? "local";
+}
+
+function emptyStats(): SyncStats {
+  return {
+    uploaded: 0,
+    downloaded: 0,
+    deletedFromS3: 0,
+    deletedFromLocal: 0,
+    conflicts: 0,
+    errors: [],
+  };
+}
+
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+// ─── Vault / S3 building blocks ───────────────────────────────────────────────
+
+async function ensureParentFolder(vault: Vault, filePath: string): Promise<void> {
+  const parts = filePath.split("/");
+  if (parts.length <= 1) return;
+  const folderPath = parts.slice(0, -1).join("/");
+  if (!(await vault.adapter.exists(folderPath))) {
+    await vault.createFolder(folderPath);
+  }
+}
+
+/** Read fresh mtime/size from the vault's TFile, or `null` if not yet visible. */
+function readVaultStat(vault: Vault, key: string): { mtime: number; size: number } | null {
+  const file = vault.getAbstractFileByPath(key);
+  return file instanceof TFile ? file.stat : null;
+}
+
+/** Build a SyncRecord, falling back through fresh stat → change snapshot → defaults. */
+function buildSyncRecord(
+  vault: Vault,
+  change: FileChange,
+  etag: string,
+  fallbackSize: number,
+): SyncRecord {
+  const stat = readVaultStat(vault, change.key);
+  return {
+    key: change.key,
+    s3Key: change.s3Key,
+    etag,
+    localMtime: stat?.mtime ?? change.localMtime ?? Date.now(),
+    localSize: stat?.size ?? change.localSize ?? fallbackSize,
+    syncTime: Date.now(),
+  };
+}
+
+async function uploadLocalToS3(
+  change: FileChange,
+  vault: Vault,
+  s3: S3ClientWrapper,
+): Promise<string> {
+  const data = await vault.adapter.readBinary(change.key);
+  return s3.putObject(change.s3Key, data, change.localMtime);
+}
+
+async function downloadS3ToLocal(
+  change: FileChange,
+  vault: Vault,
+  s3: S3ClientWrapper,
+): Promise<ArrayBuffer> {
+  const data = await s3.getObject(change.s3Key);
+  await ensureParentFolder(vault, change.key);
+  await vault.adapter.writeBinary(change.key, data);
+  return data;
+}
+
+async function trashFile(vault: Vault, key: string): Promise<void> {
+  if (!(await vault.adapter.exists(key))) return;
+  const trashed = await vault.adapter.trashSystem(key);
+  if (!trashed) await vault.adapter.trashLocal(key);
+}
+
+async function backupLocalIfExists(vault: Vault, key: string): Promise<void> {
+  if (!(await vault.adapter.exists(key))) return;
+  const bytes = await vault.adapter.readBinary(key);
+  const backupKey = makeBackupKey(key);
+  await ensureParentFolder(vault, backupKey);
+  await vault.adapter.writeBinary(backupKey, bytes);
 }
 
 // ─── Core Executor ────────────────────────────────────────────────────────────
@@ -61,24 +142,14 @@ export async function executeSync(
   vault: Vault,
   s3: S3ClientWrapper,
   db: LocalDB,
-  onProgress?: ProgressCallback
+  onProgress?: ProgressCallback,
 ): Promise<SyncStats> {
-  const stats: SyncStats = {
-    uploaded: 0,
-    downloaded: 0,
-    deletedFromS3: 0,
-    deletedFromLocal: 0,
-    conflicts: 0,
-    errors: [],
-  };
-
+  const stats = emptyStats();
   const selected = changes.filter((c) => shouldInclude(c.key, opts));
   const total = selected.length;
   let done = 0;
 
-  const progress = (file: string, action: string) => {
-    onProgress?.(done, total, file, action);
-  };
+  const progress = (file: string, action: string) => onProgress?.(done, total, file, action);
 
   const newRecords: SyncRecord[] = [];
   const fileLog: SyncFileRecord[] = [];
@@ -88,136 +159,69 @@ export async function executeSync(
 
     try {
       switch (change.changeType) {
-        // ── Upload local → S3 ─────────────────────────────────────────────────
         case "local_new":
         case "local_modified": {
           progress(change.key, "uploading");
-          const data = await vault.adapter.readBinary(change.key);
-          const etag = await s3.putObject(change.s3Key, data, change.localMtime);
-          const file = vault.getAbstractFileByPath(change.key);
-          const mtime = (file as any)?.stat?.mtime ?? change.localMtime ?? Date.now();
-          const size = (file as any)?.stat?.size ?? change.localSize ?? data.byteLength;
-          newRecords.push({
-            key: change.key,
-            s3Key: change.s3Key,
-            etag,
-            localMtime: mtime,
-            localSize: size,
-            syncTime: Date.now(),
-          });
+          const etag = await uploadLocalToS3(change, vault, s3);
+          newRecords.push(buildSyncRecord(vault, change, etag, 0));
           fileLog.push({ key: change.key, action: "uploaded" });
           stats.uploaded++;
           break;
         }
 
-        // ── Download S3 → local ───────────────────────────────────────────────
         case "remote_new":
         case "remote_modified": {
           progress(change.key, "downloading");
-          const data = await s3.getObject(change.s3Key);
-          await ensureParentFolder(vault, change.key);
-          await vault.adapter.writeBinary(change.key, data);
-          const file = vault.getAbstractFileByPath(change.key);
-          const mtime = (file as any)?.stat?.mtime ?? Date.now();
-          const size = (file as any)?.stat?.size ?? data.byteLength;
-          newRecords.push({
-            key: change.key,
-            s3Key: change.s3Key,
-            etag: change.remoteEtag ?? "",
-            localMtime: mtime,
-            localSize: size,
-            syncTime: Date.now(),
-          });
+          const data = await downloadS3ToLocal(change, vault, s3);
+          newRecords.push(buildSyncRecord(vault, change, change.remoteEtag ?? "", data.byteLength));
           fileLog.push({ key: change.key, action: "downloaded" });
           stats.downloaded++;
           break;
         }
 
-        // ── Delete from S3 (locally deleted) ──────────────────────────────────
-        case "local_deleted": {
+        case "local_deleted":
           progress(change.key, "deleting from S3");
           await s3.deleteObject(change.s3Key);
           await db.deleteSyncRecord(change.key);
           fileLog.push({ key: change.key, action: "deleted-s3" });
           stats.deletedFromS3++;
           break;
-        }
 
-        // ── Delete from local (remotely deleted) ──────────────────────────────
-        case "remote_deleted": {
+        case "remote_deleted":
           progress(change.key, "deleting locally");
-          const fileExists = await vault.adapter.exists(change.key);
-          if (fileExists) {
-            const trashed = await vault.adapter.trashSystem(change.key);
-            if (!trashed) await vault.adapter.trashLocal(change.key);
-          }
+          await trashFile(vault, change.key);
           await db.deleteSyncRecord(change.key);
           fileLog.push({ key: change.key, action: "deleted-local" });
           stats.deletedFromLocal++;
           break;
-        }
 
-        // ── Conflict resolution ───────────────────────────────────────────────
         case "conflict": {
           stats.conflicts++;
-          const resolution = resolveConflict(change.key, opts);
-
-          if (resolution === "local") {
+          if (resolveConflict(change.key, opts) === "local") {
             progress(change.key, "uploading (conflict → local wins)");
-            const data = await vault.adapter.readBinary(change.key);
-            const etag = await s3.putObject(change.s3Key, data, change.localMtime);
-            const file = vault.getAbstractFileByPath(change.key);
-            newRecords.push({
-              key: change.key,
-              s3Key: change.s3Key,
-              etag,
-              localMtime: (file as any)?.stat?.mtime ?? change.localMtime ?? Date.now(),
-              localSize: (file as any)?.stat?.size ?? change.localSize ?? data.byteLength,
-              syncTime: Date.now(),
-            });
-            fileLog.push({ key: change.key, action: "conflict" });
+            const etag = await uploadLocalToS3(change, vault, s3);
+            newRecords.push(buildSyncRecord(vault, change, etag, 0));
             stats.uploaded++;
           } else {
             progress(change.key, "downloading (conflict → remote wins)");
-
-            // Save local copy as a backup before overwriting
-            const localExists = await vault.adapter.exists(change.key);
-            if (localExists) {
-              const localBytes = await vault.adapter.readBinary(change.key);
-              const backupKey = makeBackupKey(change.key);
-              await ensureParentFolder(vault, backupKey);
-              await vault.adapter.writeBinary(backupKey, localBytes);
-            }
-            const data = await s3.getObject(change.s3Key);
-            await ensureParentFolder(vault, change.key);
-            await vault.adapter.writeBinary(change.key, data);
-            const file = vault.getAbstractFileByPath(change.key);
-            newRecords.push({
-              key: change.key,
-              s3Key: change.s3Key,
-              etag: change.remoteEtag ?? "",
-              localMtime: (file as any)?.stat?.mtime ?? Date.now(),
-              localSize: (file as any)?.stat?.size ?? data.byteLength,
-              syncTime: Date.now(),
-            });
-            fileLog.push({ key: change.key, action: "conflict" });
+            await backupLocalIfExists(vault, change.key);
+            const data = await downloadS3ToLocal(change, vault, s3);
+            newRecords.push(buildSyncRecord(vault, change, change.remoteEtag ?? "", data.byteLength));
             stats.downloaded++;
           }
+          fileLog.push({ key: change.key, action: "conflict" });
           break;
         }
       }
-    } catch (err: any) {
-      stats.errors.push(`${change.key}: ${err?.message ?? String(err)}`);
+    } catch (err: unknown) {
+      stats.errors.push(`${change.key}: ${errMsg(err)}`);
     }
 
     done++;
     progress(change.key, "done");
   }
 
-  // Persist sync records for successfully processed files
   await db.bulkUpsertSyncRecords(newRecords);
-
-  // Write sync history entry
   await db.addHistoryEntry({
     id: nanoid(),
     time: Date.now(),
@@ -229,52 +233,26 @@ export async function executeSync(
   return stats;
 }
 
-// ─── Utility ──────────────────────────────────────────────────────────────────
-
-async function ensureParentFolder(vault: Vault, filePath: string): Promise<void> {
-  const parts = filePath.split("/");
-  if (parts.length <= 1) return;
-  const folderPath = parts.slice(0, -1).join("/");
-  if (!(await vault.adapter.exists(folderPath))) {
-    await vault.createFolder(folderPath);
-  }
-}
-
 // ─── Dry-run summary ──────────────────────────────────────────────────────────
 
-/** Returns what WOULD happen without actually doing it */
-export function dryRunStats(changes: FileChange[], opts: SyncOptions): SyncStats {
-  const stats: SyncStats = {
-    uploaded: 0,
-    downloaded: 0,
-    deletedFromS3: 0,
-    deletedFromLocal: 0,
-    conflicts: 0,
-    errors: [],
-  };
+type CountField = Exclude<keyof SyncStats, "errors">;
 
+const STATS_FIELD: Record<FileChange["changeType"], CountField> = {
+  local_new: "uploaded",
+  local_modified: "uploaded",
+  remote_new: "downloaded",
+  remote_modified: "downloaded",
+  local_deleted: "deletedFromS3",
+  remote_deleted: "deletedFromLocal",
+  conflict: "conflicts",
+};
+
+/** Returns what WOULD happen without actually doing it. */
+export function dryRunStats(changes: FileChange[], opts: SyncOptions): SyncStats {
+  const stats = emptyStats();
   for (const c of changes) {
     if (!shouldInclude(c.key, opts)) continue;
-    switch (c.changeType) {
-      case "local_new":
-      case "local_modified":
-        stats.uploaded++;
-        break;
-      case "remote_new":
-      case "remote_modified":
-        stats.downloaded++;
-        break;
-      case "local_deleted":
-        stats.deletedFromS3++;
-        break;
-      case "remote_deleted":
-        stats.deletedFromLocal++;
-        break;
-      case "conflict":
-        stats.conflicts++;
-        break;
-    }
+    stats[STATS_FIELD[c.changeType]]++;
   }
-
   return stats;
 }

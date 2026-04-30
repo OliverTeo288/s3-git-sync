@@ -2,7 +2,7 @@
   "id": "s3-git-sync",
   "name": "S3 Git Sync",
   "version": "1.0.2",
-  "minAppVersion": "1.0.0",
+  "minAppVersion": "1.4.0",
   "description": "Sync your vault to S3 with a git-like workflow: preview changes, stage files, and commit to S3.",
   "author": "OliverTeo288",
   "authorUrl": "https://github.com/OliverTeo288",

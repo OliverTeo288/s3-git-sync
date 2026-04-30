@@ -55,7 +55,8 @@ export interface S3GitSyncSettings {
 
 export const DEFAULT_SETTINGS: S3GitSyncSettings = {
   s3: DEFAULT_S3_CONFIG,
-  ignorePatterns: [".obsidian/workspace.json", ".obsidian/workspace-mobile.json", "conflict/*"],
+  // workspace files are populated dynamically from Vault.configDir at plugin load time
+  ignorePatterns: ["conflict/*"],
   showStatusBar: true,
 };
 

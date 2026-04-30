@@ -26,14 +26,14 @@ export default class S3GitSyncPlugin extends Plugin {
     this.addSettingTab(new S3GitSyncSettingTab(this.app, this));
 
     // Ribbon: click to open change view
-    this.addRibbonIcon("refresh-cw", "S3 Git Sync — View changes", () => {
+    this.addRibbonIcon("refresh-cw", "S3 Git sync — view changes", () => {
       this.openChangeView();
     });
 
     // Status bar
     if (this.settings.showStatusBar) {
       const item = this.addStatusBarItem();
-      this.statusBarEl = item.createEl("span", { cls: "s3sync-statusbar" });
+      this.statusBarEl = item.createSpan({ cls: "s3sync-statusbar" });
       this.updateStatusBar("Ready");
     }
 
@@ -41,14 +41,14 @@ export default class S3GitSyncPlugin extends Plugin {
 
     this.addCommand({
       id: "view-changes",
-      name: "View Changes (git status)",
+      name: "View changes (Git status)",
       icon: "diff",
       callback: () => this.openChangeView(),
     });
 
     this.addCommand({
       id: "quick-sync",
-      name: "Quick Sync (all changes, default resolutions)",
+      name: "Quick sync (all changes, default resolutions)",
       icon: "refresh-cw",
       callback: () => this.quickSync(),
     });
@@ -69,23 +69,31 @@ export default class S3GitSyncPlugin extends Plugin {
 
     this.addCommand({
       id: "view-history",
-      name: "View Sync History (git log)",
+      name: "View sync history (Git log)",
       icon: "history",
       callback: () => new HistoryModal(this.app, this.db).open(),
     });
 
   }
 
-  async onunload() {
-  }
-
   // ── Settings ──────────────────────────────────────────────────────────────────
 
   async loadSettings() {
-    const saved = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved ?? {});
+    const saved = (await this.loadData()) as Partial<S3GitSyncSettings> | null;
+    this.settings = { ...DEFAULT_SETTINGS, ...(saved ?? {}) };
     // Deep-merge S3 config
-    this.settings.s3 = Object.assign({}, DEFAULT_SETTINGS.s3, saved?.s3 ?? {});
+    this.settings.s3 = { ...DEFAULT_SETTINGS.s3, ...(saved?.s3 ?? {}) };
+
+    // First-run: prepend workspace files (resolved against the user's actual config dir)
+    // to the default ignore list so we never sync them.
+    if (saved == null) {
+      const dir = this.app.vault.configDir;
+      this.settings.ignorePatterns = [
+        `${dir}/workspace.json`,
+        `${dir}/workspace-mobile.json`,
+        ...this.settings.ignorePatterns,
+      ];
+    }
   }
 
   async saveSettings() {
@@ -117,10 +125,11 @@ export default class S3GitSyncPlugin extends Plugin {
   openExternalBrowser(url: string): void {
     if (Platform.isDesktop) {
       try {
-        const req = (globalThis as Record<string, unknown>)["require"] as (id: string) => any;
+        // eslint-disable-next-line obsidianmd/prefer-active-doc -- accessing Electron's CommonJS require, not the document
+        const req = (globalThis as Record<string, unknown>)["require"] as (id: string) => unknown;
         const { platform } = req("process") as { platform: string };
         const cp = req("child_process") as {
-          spawn(cmd: string, args: string[], opts: object): { unref(): void };
+          spawn: (cmd: string, args: string[], opts: object) => { unref: () => void };
         };
         if (platform === "darwin") {
           cp.spawn("open", [url], { detached: true }).unref();
@@ -141,14 +150,13 @@ export default class S3GitSyncPlugin extends Plugin {
    */
   handleSyncError(err: unknown, prefix: string): void {
     if (err instanceof SSOSessionExpiredError) {
-      const profileName = this.settings.s3.s3ProfileName || "default";
       new Notice(
-        `AWS SSO session expired.\n\nRun in a terminal:\n  aws sso login --profile ${profileName}\n\nThen retry the sync.`,
+        `AWS SSO session expired.\n\nRun in a terminal:\n  aws sso login --profile ${err.profileName}\n\nThen retry the sync.`,
         15_000
       );
       return;
     }
-    const msg = (err as Record<string, unknown>)?.["message"] as string | undefined ?? String(err);
+    const msg = err instanceof Error ? err.message : String(err);
     new Notice(`${prefix}: ${msg}`, 8_000);
   }
 
@@ -170,12 +178,12 @@ export default class S3GitSyncPlugin extends Plugin {
   }
 
   /** Sync without the interactive modal — conflicts are skipped and flagged for manual resolution */
-  async quickSync(silent = false) {
+  async quickSync() {
     if (this.isSyncing) return;
     this.isSyncing = true;
     this.updateStatusBar("Syncing…");
 
-    const notice = silent ? null : new Notice("Syncing…", 0);
+    const notice = new Notice("Syncing…", 0);
 
     try {
       const { changes } = await computeChanges(
@@ -186,9 +194,9 @@ export default class S3GitSyncPlugin extends Plugin {
       );
 
       if (changes.length === 0) {
-        notice?.hide();
+        notice.hide();
         this.updateStatusBar("Up to date");
-        if (!silent) new Notice("Everything is up to date.", 3000);
+        new Notice("Everything is up to date.", 3000);
         return;
       }
 
@@ -203,9 +211,9 @@ export default class S3GitSyncPlugin extends Plugin {
       }
 
       if (syncable.length === 0) {
-        notice?.hide();
+        notice.hide();
         this.updateStatusBar("Up to date");
-        if (!silent) new Notice("Everything is up to date.", 3000);
+        new Notice("Everything is up to date.", 3000);
         return;
       }
 
@@ -215,13 +223,13 @@ export default class S3GitSyncPlugin extends Plugin {
         this.app.vault,
         this.s3Client,
         this.db,
-        (done, total, file, action) => {
+        (done, total, file, _action) => {
           this.updateStatusBar(`${done + 1}/${total}`);
-          notice?.setMessage(`Syncing ${done + 1}/${total}: ${file}`);
+          notice.setMessage(`Syncing ${done + 1}/${total}: ${file}`);
         }
       );
 
-      notice?.hide();
+      notice.hide();
       const summary = [
         stats.uploaded && `↑${stats.uploaded}`,
         stats.downloaded && `↓${stats.downloaded}`,
@@ -233,13 +241,13 @@ export default class S3GitSyncPlugin extends Plugin {
 
       const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       this.updateStatusBar(`Synced ${ts}`);
-      if (!silent) new Notice(`Sync complete: ${summary}`, 5000);
+      new Notice(`Sync complete: ${summary}`, 5000);
       if (stats.errors.length > 0) {
         new Notice(`⚠ ${stats.errors.length} file(s) failed to sync. Check console.`, 8000);
         stats.errors.forEach((e) => console.error("[S3 Git Sync]", e));
       }
     } catch (err: unknown) {
-      notice?.hide();
+      notice.hide();
       this.updateStatusBar("Error");
       this.handleSyncError(err, "Sync failed");
     } finally {

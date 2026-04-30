@@ -38,6 +38,38 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # Emits inline ::error:: / ::warning:: annotations on the PR diff
+      # by piping ESLint's JSON output through a small Node script.
+      # Fails the job on any error (sentence-case false positives are
+      # downgraded to warnings — see eslint.config.mjs for rationale).
+      - name: ESLint (Obsidian community-plugin rules)
+        run: |
+          set -o pipefail
+          npx eslint src/ --format=json --output-file=eslint.json || true
+          node -e "
+            const r = JSON.parse(require('fs').readFileSync('eslint.json','utf8'));
+            let errors = 0, warnings = 0;
+            for (const f of r) for (const m of f.messages) {
+              const sev = m.severity === 2 ? 'error' : 'warning';
+              if (m.severity === 2) errors++; else warnings++;
+              const file = require('path').relative(process.cwd(), f.filePath);
+              process.stdout.write(\`::\${sev} file=\${file},line=\${m.line},col=\${m.column}::[\${m.ruleId}] \${m.message}\n\`);
+            }
+            console.log(\`\nESLint: \${errors} error(s), \${warnings} warning(s)\`);
+            process.exit(errors > 0 ? 1 : 0);
+          "
+
+      - name: ESLint summary
+        if: always()
+        run: |
+          {
+            echo "### ESLint report"
+            echo ""
+            echo '```'
+            npx eslint src/ --format=stylish 2>&1 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: TypeScript type-check
         run: npx tsc --noEmit --skipLibCheck
 
