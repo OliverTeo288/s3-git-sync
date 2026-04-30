@@ -1,6 +1,6 @@
 {
   "name": "s3-git-sync",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Obsidian plugin: sync vault to S3 with a git-like workflow",
   "scripts": {
     "dev": "node esbuild.config.mjs --watch",
