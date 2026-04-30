@@ -1,0 +1,138 @@
+name: CI / Release
+
+# Runs on every branch push and PR for build/test verification.
+# When a semver tag is pushed (e.g. git tag 1.0.0 && git push origin 1.0.0),
+# the release job also runs: it stamps the version, publishes a GitHub Release,
+# and attaches the required Obsidian plugin artefacts.
+
+on:
+  push:
+    branches: ["**"]
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"   # 1.0.0, 1.2.3 — no v prefix
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Allow tag-triggered runs to complete; cancel redundant branch runs
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+# ─── Job 1: Build & Test (runs on every push / PR) ───────────────────────────
+
+jobs:
+  build-test:
+    name: Type-check · Test · Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af  # v4.1.0
+        with:
+          node-version: "25"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: TypeScript type-check
+        run: npx tsc --noEmit --skipLibCheck
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: ignore
+
+      - name: Build plugin
+        run: node esbuild.config.mjs production
+
+      - name: Verify required artefacts exist
+        run: |
+          for f in main.js manifest.json styles.css; do
+            [ -f "$f" ] || { echo "Missing: $f"; exit 1; }
+          done
+          echo "All required artefacts present."
+
+# ─── Job 2: Release (runs only on semver tag pushes) ─────────────────────────
+
+  release:
+    name: Publish GitHub Release
+    needs: build-test
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create releases, push tags, push version-bump commit
+
+    steps:
+      - name: Checkout (full history for tag inspection)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.VERSION_BUMP_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing version: $VERSION"
+
+      - name: Stamp manifest.json
+        run: |
+          node -e "
+            const fs = require('fs');
+            const m = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+            m.version = '${{ steps.version.outputs.version }}';
+            fs.writeFileSync('manifest.json', JSON.stringify(m, null, 2) + '\n');
+          "
+
+      - name: Stamp package.json
+        run: npm version --no-git-tag-version ${{ steps.version.outputs.version }}
+
+      - name: Commit version bump
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifest.json package.json package-lock.json
+          git diff --cached --quiet || git commit -m "chore: bump version to ${{ steps.version.outputs.version }} [skip ci]"
+          git push origin HEAD:main
+
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af  # v4.1.0
+        with:
+          node-version: "25"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build production bundle
+        run: node esbuild.config.mjs production
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191  # v2.2.1
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: |
+            main.js
+            manifest.json
+            styles.css
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "### Released ${{ steps.version.outputs.version }} 🚀" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Install via [BRAT](https://github.com/TfTHacker/obsidian42-brat): \`${{ github.repository }}\`" >> "$GITHUB_STEP_SUMMARY"
