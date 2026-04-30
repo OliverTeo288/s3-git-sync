@@ -16,10 +16,9 @@
   "author": "OliverTeo288",
   "license": "MIT",
   "devDependencies": {
-    "@types/node": "^20.14.12",
+    "@types/node": "^25.6.0",
     "@vitest/coverage-v8": "^4.1.5",
-    "builtin-modules": "^4.0.0",
-    "dotenv": "^16.4.5",
+    "dotenv": "^17.4.2",
     "esbuild": "^0.28.0",
     "obsidian": "^1.5.7",
     "rimraf": "^6.0.1",
@@ -28,12 +27,12 @@
     "vitest": "^4.1.5"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.620.0",
-    "@aws-sdk/credential-providers": "^3.620.0",
-    "@aws-sdk/lib-storage": "^3.620.0",
-    "@smithy/fetch-http-handler": "^3.2.4",
-    "@smithy/protocol-http": "^4.1.0",
-    "@smithy/querystring-builder": "^3.0.3",
+    "@aws-sdk/client-s3": "^3.1039.0",
+    "@aws-sdk/credential-providers": "^3.1039.0",
+    "@aws-sdk/lib-storage": "^3.1039.0",
+    "@smithy/fetch-http-handler": "^5.3.17",
+    "@smithy/protocol-http": "^5.3.14",
+    "@smithy/querystring-builder": "^4.2.14",
     "localforage": "^1.10.0",
     "nanoid": "^5.0.7"
   }
