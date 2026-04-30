@@ -1,6 +1,6 @@
 # S3 Git Sync
 
-An [Obsidian](https://obsidian.md) plugin that syncs your vault to an S3 bucket using a **git-like workflow** — inspect every pending change before it goes anywhere, stage what you want, write a commit message, and push. No data leaves your vault without your review.
+An [Obsidian](https://obsidian.md) plugin that syncs your vault to an S3 bucket using a **git-like workflow** — review every pending change before it goes anywhere, stage what you want, write a commit message, and push. No data leaves your vault without your review.
 
 Works with AWS S3, MinIO, Cloudflare R2, Backblaze B2, and any S3-compatible object store.
 
@@ -10,7 +10,7 @@ Works with AWS S3, MinIO, Cloudflare R2, Backblaze B2, and any S3-compatible obj
 
 Most sync plugins treat your vault like a file-sync tool (Dropbox-style): changes happen automatically and you find out afterwards. S3 Git Sync works differently. Before anything is uploaded or downloaded, you see exactly what changed and why — the same mental model as `git status` and `git commit`.
 
-The plugin maintains a **local sync record** (a snapshot of what was last successfully synced). On every sync it runs a three-way diff between your current local files, the current S3 state, and that snapshot. This is what allows it to distinguish "I deleted this file intentionally" from "this file never existed on this side", and to detect true conflicts (both sides changed independently).
+The plugin maintains a **local sync record** (a snapshot of what was last synced successfully). On every sync it runs a three-way diff between your current local files, the current S3 state, and that snapshot. This is what allows it to distinguish "I deleted this file intentionally" from "this file never existed on this side", and to detect true conflicts (both sides changed independently).
 
 ---
 
@@ -77,19 +77,6 @@ The plugin maintains a **local sync record** (a snapshot of what was last succes
 | **Reset sync state** | Clears all local sync records so the next run treats everything as a fresh first sync. |
 | **Structured error codes** | All errors include a `[S3S-Exx]` code for quick lookup in the troubleshooting table below. |
 
----
-
-## Platform support
-
-| Platform | Static credentials | AWS Named Profile |
-|---|---|---|
-| macOS | ✅ | ✅ |
-| Windows | ✅ | ✅ |
-| Linux | ✅ | ✅ |
-| Android | ✅ | ❌ (desktop only) |
-| iOS | ✅ | ❌ (desktop only) |
-
-AWS Named Profile authentication reads `~/.aws/credentials` and `~/.aws/config` via native Node.js — these files do not exist on mobile devices. Use static credentials on mobile.
 
 ---
 
@@ -118,7 +105,7 @@ aws sso login --profile my-profile
 
 > Manual install until the plugin is listed in the community directory.
 
-1. Download the latest release from [GitHub Releases](../../releases/latest).
+1. Download the latest release from [GitHub Releases](https://github.com/OliverTeo288/s3sync/releases/latest).
 2. Copy `main.js`, `manifest.json`, and `styles.css` into `.obsidian/plugins/s3-git-sync/`.
 3. Reload Obsidian and enable the plugin in **Settings → Community Plugins**.
 
@@ -164,7 +151,7 @@ For text files in the Modified sections, click **▶ diff** to see a line-by-lin
 
 ### Quick Sync
 
-Syncs everything except conflicts without opening the modal. Useful as a hotkey for a quick push/pull.
+Syncs everything except conflicts without opening the modal. Useful as a hotkey for a quick catch-up sync.
 
 ```
 S3 Git Sync: Quick Sync (all changes, default resolutions)
