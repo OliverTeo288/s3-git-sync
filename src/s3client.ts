@@ -49,7 +49,7 @@ export const EC = {
   UNKNOWN:           "S3S-E99",
 } as const;
 
-function errorCode(err: unknown): string {
+export function errorCode(err: unknown): string {
   const name = String((err as Record<string, unknown>)?.["name"] ?? "");
   const msg  = String((err as Record<string, unknown>)?.["message"] ?? "").toLowerCase();
   if (name === "NoSuchBucket")                                           return EC.NOT_FOUND;
