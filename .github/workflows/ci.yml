@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: ["**"]
+    tags-ignore:
+      - "**"   # release.yml handles tag pushes; CI should not duplicate that work
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Type-check · Test · Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af  # v4.1.0
+        with:
+          node-version: "25"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ── Quality gates ───────────────────────────────────────────────────────
+
+      - name: TypeScript type-check
+        run: npx tsc --noEmit --skipLibCheck
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: ignore
+
+      # ── Build verification ──────────────────────────────────────────────────
+
+      - name: Build plugin
+        run: node esbuild.config.mjs production
+
+      - name: Verify required artefacts exist
+        run: |
+          for f in main.js manifest.json styles.css; do
+            [ -f "$f" ] || { echo "Missing: $f"; exit 1; }
+          done
+          echo "All required artefacts present."

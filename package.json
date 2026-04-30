@@ -1,0 +1,40 @@
+{
+  "name": "s3-git-sync",
+  "version": "1.0.0",
+  "description": "Obsidian plugin: sync vault to S3 with a git-like workflow",
+  "scripts": {
+    "dev": "node esbuild.config.mjs --watch",
+    "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
+    "clean": "rimraf main.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:docker": "bash scripts/test-docker.sh"
+  },
+  "keywords": [],
+  "author": "OliverTeo288",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.14.12",
+    "@vitest/coverage-v8": "^4.1.5",
+    "builtin-modules": "^4.0.0",
+    "dotenv": "^16.4.5",
+    "esbuild": "^0.28.0",
+    "obsidian": "^1.5.7",
+    "rimraf": "^6.0.1",
+    "tslib": "^2.6.3",
+    "typescript": "^5.5.4",
+    "vitest": "^4.1.5"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.620.0",
+    "@aws-sdk/credential-providers": "^3.620.0",
+    "@aws-sdk/lib-storage": "^3.620.0",
+    "@smithy/fetch-http-handler": "^3.2.4",
+    "@smithy/protocol-http": "^4.1.0",
+    "@smithy/querystring-builder": "^3.0.3",
+    "localforage": "^1.10.0",
+    "nanoid": "^5.0.7"
+  }
+}

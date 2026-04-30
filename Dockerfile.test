@@ -1,0 +1,31 @@
+# ─── Build & unit-test stage (Linux verification) ─────────────────────────────
+# Runs at `docker compose build` time — proves the plugin compiles and all
+# unit tests pass on a clean Linux Node.js environment.
+FROM node:25.3.0-alpine AS builder
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+
+# Type-check (proves TypeScript compiles on Linux)
+RUN npx tsc --noEmit --skipLibCheck
+
+# Unit tests (proves logic is correct on Linux)
+RUN npm test
+
+# Production build (proves esbuild bundling works on Linux)
+RUN node esbuild.config.mjs production
+
+# ─── Integration-test runner stage ────────────────────────────────────────────
+# CMD runs at container start, after docker compose ensures LocalStack is healthy.
+FROM node:25.3.0-alpine
+
+WORKDIR /app
+
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app /app
+
+CMD ["npm", "run", "test:integration"]

@@ -1,0 +1,41 @@
+services:
+
+  # ── LocalStack S3 emulator ────────────────────────────────────────────────
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      SERVICES: s3
+      DEFAULT_REGION: us-east-1
+      # Disable telemetry
+      DISABLE_EVENTS: "1"
+    ports:
+      - "4566:4566"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >
+          curl -sf http://localhost:4566/_localstack/health
+          | grep -q '"s3"'
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # ── Test runner ───────────────────────────────────────────────────────────
+  # BUILD phase:  type-check + unit tests on Linux (baked into the image)
+  # START phase:  integration tests against LocalStack
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    depends_on:
+      localstack:
+        condition: service_healthy
+    environment:
+      LOCALSTACK_ENDPOINT: http://localstack:4566
+      # LocalStack accepts any non-empty credentials for S3
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      # Disable AWS SDK's real credential chain lookup
+      AWS_SDK_LOAD_CONFIG: "0"

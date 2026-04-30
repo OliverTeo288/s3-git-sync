@@ -1,0 +1,614 @@
+/* ─── S3 Git Sync Plugin Styles ─────────────────────────────────────────────── */
+
+/* Modal container */
+.s3sync-modal {
+  padding: 0 4px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+/* Header */
+.s3sync-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.s3sync-header h2 {
+  margin: 0;
+}
+
+/* Badge row in header */
+.s3sync-stats-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.s3sync-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.78em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.s3sync-badge-upload {
+  background-color: var(--color-green);
+  color: var(--text-on-accent);
+}
+
+.s3sync-badge-download {
+  background-color: var(--color-blue);
+  color: var(--text-on-accent);
+}
+
+.s3sync-badge-delete {
+  background-color: var(--color-red);
+  color: var(--text-on-accent);
+}
+
+.s3sync-badge-conflict {
+  background-color: var(--color-orange);
+  color: var(--text-on-accent);
+}
+
+/* Sections */
+.s3sync-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.s3sync-section {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.s3sync-section h4 {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 0.88em;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.s3sync-section-upload h4 {
+  background-color: rgba(var(--color-green-rgb), 0.12);
+  color: var(--color-green);
+}
+
+.s3sync-section-download h4 {
+  background-color: rgba(var(--color-blue-rgb), 0.12);
+  color: var(--color-blue);
+}
+
+.s3sync-section-delete-s3 h4,
+.s3sync-section-delete-local h4 {
+  background-color: rgba(var(--color-red-rgb), 0.12);
+  color: var(--color-red);
+}
+
+.s3sync-section-conflict h4 {
+  background-color: rgba(var(--color-orange-rgb), 0.12);
+  color: var(--color-orange);
+}
+
+/* File rows */
+.s3sync-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border-top: 1px solid var(--background-modifier-border);
+  font-size: 0.9em;
+}
+
+.s3sync-file-row:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.s3sync-file-checkbox {
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+/* File extension badge (MD / PDF / PNG / etc.) */
+.s3sync-ext-badge {
+  flex-shrink: 0;
+  font-size: 0.68em;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+  background-color: var(--background-modifier-border);
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+}
+
+/* File extension badge inside conflict header (inline, not flex item) */
+.s3sync-conflict-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.s3sync-conflict-header .s3sync-file-path-wrap {
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* Type badges (NEW / MOD / DEL) */
+.s3sync-type-badge {
+  flex-shrink: 0;
+  font-size: 0.72em;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+}
+
+.s3sync-type-new {
+  background-color: rgba(var(--color-green-rgb), 0.25);
+  color: var(--color-green);
+}
+
+.s3sync-type-mod {
+  background-color: rgba(var(--color-blue-rgb), 0.2);
+  color: var(--color-blue);
+}
+
+.s3sync-type-del {
+  background-color: rgba(var(--color-red-rgb), 0.2);
+  color: var(--color-red);
+}
+
+/* Two-line path display: filename on top, directory path below */
+.s3sync-file-path-wrap {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.s3sync-file-name {
+  display: block;
+  font-family: var(--font-monospace);
+  font-size: 0.9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.s3sync-file-dir {
+  display: block;
+  font-family: var(--font-monospace);
+  font-size: 0.75em;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+
+/* Kept for conflict header (uses .s3sync-file-path on the wrap's parent) */
+.s3sync-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.s3sync-file-meta {
+  flex-shrink: 0;
+  font-size: 0.8em;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Conflict section */
+.s3sync-conflict-hint {
+  margin: 4px 12px 8px;
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+
+.s3sync-conflict-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.s3sync-conflict-info {
+  flex: 1;
+  overflow: hidden;
+}
+
+.s3sync-conflict-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 0.8em;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.s3sync-conflict-controls {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.s3sync-conflict-btn {
+  font-size: 0.8em;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-muted);
+}
+
+.s3sync-conflict-btn.active {
+  border-color: var(--color-orange);
+  color: var(--color-orange);
+  background: rgba(var(--color-orange-rgb), 0.15);
+  font-weight: 600;
+}
+
+/* Commit message row */
+.s3sync-message-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 6px;
+}
+
+.s3sync-message-row label {
+  flex-shrink: 0;
+  font-size: 0.88em;
+  color: var(--text-muted);
+}
+
+.s3sync-message-row input {
+  flex: 1;
+  background: var(--background-modifier-form-field);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: var(--text-normal);
+  font-size: 0.9em;
+}
+
+/* Progress bar text */
+.s3sync-progress {
+  margin: 8px 0;
+  padding: 6px 10px;
+  background: var(--background-secondary);
+  border-radius: 4px;
+  font-size: 0.85em;
+  font-family: var(--font-monospace);
+  color: var(--text-muted);
+}
+
+/* Footer */
+.s3sync-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  margin-top: 4px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.s3sync-footer-secondary {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.s3sync-footer-secondary button {
+  font-size: 0.85em;
+}
+
+.s3sync-footer-primary {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Empty state */
+.s3sync-empty {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.95em;
+}
+
+/* Result view */
+.s3sync-result-summary {
+  margin: 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.s3sync-result-row {
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.s3sync-result-upload { background: rgba(var(--color-green-rgb), 0.1); }
+.s3sync-result-download { background: rgba(var(--color-blue-rgb), 0.1); }
+.s3sync-result-delete { background: rgba(var(--color-red-rgb), 0.1); }
+.s3sync-result-conflict { background: rgba(var(--color-orange-rgb), 0.1); }
+
+.s3sync-error-list {
+  font-size: 0.85em;
+  font-family: var(--font-monospace);
+  color: var(--color-red);
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+/* History modal */
+.s3sync-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.s3sync-history-row {
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+}
+
+.s3sync-history-stats-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+}
+
+.s3sync-history-stats {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+}
+
+.s3sync-history-files-toggle {
+  font-size: 0.75em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.s3sync-history-files-toggle:hover {
+  border-color: var(--interactive-accent);
+  color: var(--interactive-accent);
+}
+
+.s3sync-history-files {
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--background-primary-alt);
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.s3sync-history-file {
+  font-size: 0.8em;
+  font-family: var(--font-monospace);
+  color: var(--text-muted);
+  padding: 1px 0;
+}
+
+/* Status bar */
+.s3sync-statusbar {
+  font-size: 0.8em;
+  color: var(--text-muted);
+  cursor: default;
+  user-select: none;
+}
+
+/* ─── Loading / error states inside modal ────────────────────────────────────── */
+
+.s3sync-loading {
+  padding: 32px 0;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.92em;
+}
+
+.s3sync-error-banner {
+  margin: 16px 0 8px;
+  padding: 10px 14px;
+  border-radius: 4px;
+  background: rgba(var(--color-red-rgb), 0.1);
+  color: var(--color-red);
+  font-size: 0.88em;
+}
+
+.s3sync-retry-btn {
+  display: block;
+  margin: 0 auto;
+}
+
+
+/* ─── Diff toggle button ─────────────────────────────────────────────────────── */
+
+.s3sync-diff-toggle {
+  flex-shrink: 0;
+  font-size: 0.72em;
+  padding: 1px 7px;
+  border-radius: 3px;
+  cursor: pointer;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.s3sync-diff-toggle:hover {
+  border-color: var(--interactive-accent);
+  color: var(--interactive-accent);
+}
+
+/* ─── Diff panel ─────────────────────────────────────────────────────────────── */
+
+.s3sync-diff-panel {
+  border-top: 1px solid var(--background-modifier-border);
+  background: var(--background-primary-alt);
+  overflow: hidden;
+}
+
+.s3sync-diff-header {
+  display: flex;
+  gap: 16px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-size: 0.75em;
+  font-family: var(--font-monospace);
+}
+
+.s3sync-diff-label-del {
+  color: var(--color-red);
+}
+
+.s3sync-diff-label-add {
+  color: var(--color-green);
+}
+
+.s3sync-diff-body {
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: var(--font-monospace);
+  font-size: 0.8em;
+}
+
+.s3sync-diff-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 1px 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.s3sync-diff-added {
+  background: rgba(var(--color-green-rgb), 0.1);
+  color: var(--color-green);
+}
+
+.s3sync-diff-removed {
+  background: rgba(var(--color-red-rgb), 0.1);
+  color: var(--color-red);
+}
+
+.s3sync-diff-context {
+  color: var(--text-muted);
+}
+
+.s3sync-diff-prefix {
+  flex-shrink: 0;
+  width: 10px;
+  user-select: none;
+  color: inherit;
+  opacity: 0.7;
+}
+
+.s3sync-diff-text {
+  flex: 1;
+}
+
+.s3sync-diff-separator {
+  padding: 2px 12px;
+  font-size: 0.78em;
+  font-family: var(--font-monospace);
+  color: var(--text-faint);
+  background: var(--background-modifier-border);
+  text-align: center;
+  letter-spacing: 0.1em;
+}
+
+.s3sync-diff-loading,
+.s3sync-diff-empty,
+.s3sync-diff-error {
+  padding: 10px 12px;
+  font-size: 0.83em;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.s3sync-diff-error {
+  color: var(--color-red);
+}
+
+/* ─── Settings page ──────────────────────────────────────────────────────────── */
+
+/* Security notice banner at the top of the settings page */
+.s3sync-settings-banner {
+  margin: 8px 0 16px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--color-orange);
+  border-radius: 0 4px 4px 0;
+  background: rgba(var(--color-orange-rgb), 0.08);
+  font-size: 0.88em;
+  line-height: 1.5;
+}
+
+/* Auth-method specific notes */
+.s3sync-settings-auth-note {
+  margin: 4px 0 12px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: var(--background-secondary);
+  font-size: 0.85em;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* Green tint for the profile-based auth note (it's the more secure option) */
+.s3sync-settings-auth-note--good {
+  border-left: 3px solid var(--color-green);
+  background: rgba(var(--color-green-rgb), 0.06);
+}
+
+/* Input with a validation error */
+.s3sync-input-error {
+  border-color: var(--color-red) !important;
+  outline: 1px solid var(--color-red);
+}
+
+/* Input with a non-fatal warning (e.g. HTTP endpoint) */
+.s3sync-input-warning {
+  border-color: var(--color-orange) !important;
+  outline: 1px solid var(--color-orange);
+}
+
+/* Mobile warning message */
+.s3sync-settings-mobile-warn {
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: rgba(var(--color-red-rgb), 0.1);
+  color: var(--color-red);
+  font-size: 0.88em;
+}
