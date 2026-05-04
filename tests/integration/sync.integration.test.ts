@@ -15,10 +15,10 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { computeChanges } from "../../src/differ";
-import { LocalDB } from "../../src/localdb";
-import { S3ClientWrapper } from "../../src/s3client";
-import { executeSync } from "../../src/syncEngine";
+import { computeChanges } from "../../src/sync/differ";
+import { LocalDB } from "../../src/sync/localdb";
+import { S3ClientWrapper } from "../../src/s3/client";
+import { executeSync } from "../../src/sync/engine";
 import type { S3Config } from "../../src/types";
 import { DEFAULT_SETTINGS } from "../../src/types";
 

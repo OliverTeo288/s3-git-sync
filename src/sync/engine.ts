@@ -1,13 +1,14 @@
 import { nanoid } from "nanoid";
 import { TFile, type Vault } from "obsidian";
 import type { LocalDB } from "./localdb";
-import type { S3ClientWrapper } from "./s3client";
+import type { S3ClientWrapper } from "../s3/client";
 import type {
   FileChange,
   SyncFileRecord,
   SyncRecord,
   SyncStats,
-} from "./types";
+} from "../types";
+import { assertSafeVaultKey, extractErrorMessage } from "../utils";
 
 export type ProgressCallback = (
   done: number,
@@ -27,16 +28,24 @@ export interface SyncOptions {
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 
-/** Returns a backup path like `conflict/Notes/file.conflict-2026-04-30-143022.md` */
+/**
+ * Returns a backup path like `conflict/Notes/file.conflict-2026-04-30-143022-487-x9k.md`.
+ * Includes ms + 3-char random suffix so two conflicts on the same key in the
+ * same second don't overwrite each other's backups.
+ */
 function makeBackupKey(key: string): string {
-  const stamp = new Date().toISOString()
-    .slice(0, 19)           // "2026-04-30T14:30:22"
-    .replace("T", "-")      // "2026-04-30-14:30:22"
-    .replace(/:/g, "");     // "2026-04-30-143022"
+  const now = new Date();
+  const stamp = now.toISOString()
+    .slice(0, 19)
+    .replace("T", "-")
+    .replace(/:/g, "");
+  const ms = String(now.getMilliseconds()).padStart(3, "0");
+  const rand = Math.random().toString(36).slice(2, 5);
+  const suffix = `${stamp}-${ms}-${rand}`;
   const dot = key.lastIndexOf(".");
   const backupName = dot === -1
-    ? `${key}.conflict-${stamp}`
-    : `${key.slice(0, dot)}.conflict-${stamp}${key.slice(dot)}`;
+    ? `${key}.conflict-${suffix}`
+    : `${key.slice(0, dot)}.conflict-${suffix}${key.slice(dot)}`;
   return `conflict/${backupName}`;
 }
 
@@ -45,9 +54,12 @@ function shouldInclude(key: string, opts: SyncOptions): boolean {
 }
 
 function resolveConflict(key: string, opts: SyncOptions): "local" | "remote" {
-  // Quick sync / auto sync pre-filter conflicts out, so this path is only
-  // reached via the change-view modal — which always populates the map.
-  return opts.conflictResolutions?.get(key) ?? "local";
+  // The modal flow populates conflictResolutions; quick-sync pre-filters
+  // conflicts out. If we ever land here without a resolution it means a
+  // race or a caller bug — refuse rather than silently overwriting either side.
+  const res = opts.conflictResolutions?.get(key);
+  if (!res) throw new Error(`No conflict resolution provided for ${key}`);
+  return res;
 }
 
 function emptyStats(): SyncStats {
@@ -61,13 +73,11 @@ function emptyStats(): SyncStats {
   };
 }
 
-function errMsg(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 // ─── Vault / S3 building blocks ───────────────────────────────────────────────
 
-async function ensureParentFolder(vault: Vault, filePath: string): Promise<void> {
+export async function ensureParentFolder(vault: Vault, filePath: string): Promise<void> {
+  assertSafeVaultKey(filePath);
   const parts = filePath.split("/");
   if (parts.length <= 1) return;
   const folderPath = parts.slice(0, -1).join("/");
@@ -114,6 +124,7 @@ async function downloadS3ToLocal(
   vault: Vault,
   s3: S3ClientWrapper,
 ): Promise<ArrayBuffer> {
+  assertSafeVaultKey(change.key);
   const data = await s3.getObject(change.s3Key);
   await ensureParentFolder(vault, change.key);
   await vault.adapter.writeBinary(change.key, data);
@@ -121,12 +132,14 @@ async function downloadS3ToLocal(
 }
 
 async function trashFile(vault: Vault, key: string): Promise<void> {
+  assertSafeVaultKey(key);
   if (!(await vault.adapter.exists(key))) return;
   const trashed = await vault.adapter.trashSystem(key);
   if (!trashed) await vault.adapter.trashLocal(key);
 }
 
 async function backupLocalIfExists(vault: Vault, key: string): Promise<void> {
+  assertSafeVaultKey(key);
   if (!(await vault.adapter.exists(key))) return;
   const bytes = await vault.adapter.readBinary(key);
   const backupKey = makeBackupKey(key);
@@ -214,7 +227,7 @@ export async function executeSync(
         }
       }
     } catch (err: unknown) {
-      stats.errors.push(`${change.key}: ${errMsg(err)}`);
+      stats.errors.push(`${change.key}: ${extractErrorMessage(err)}`);
     }
 
     done++;

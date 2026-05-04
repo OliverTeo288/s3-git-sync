@@ -1,5 +1,5 @@
 import localforage from "localforage";
-import type { SyncHistoryEntry, SyncRecord } from "./types";
+import type { SyncHistoryEntry, SyncRecord } from "../types";
 
 type Store = ReturnType<typeof localforage.createInstance>;
 

@@ -51,6 +51,8 @@ export interface S3GitSyncSettings {
   s3: S3Config;
   ignorePatterns: string[];        // glob-like patterns to exclude
   showStatusBar: boolean;
+  /** How often to poll S3 for remote changes and update the ribbon badge (minutes). 0 = disabled. */
+  badgePollIntervalMin: number;
 }
 
 export const DEFAULT_SETTINGS: S3GitSyncSettings = {
@@ -58,7 +60,18 @@ export const DEFAULT_SETTINGS: S3GitSyncSettings = {
   // workspace files are populated dynamically from Vault.configDir at plugin load time
   ignorePatterns: ["conflict/*"],
   showStatusBar: true,
+  badgePollIntervalMin: 5,
 };
+
+// ─── S3 Object Version ────────────────────────────────────────────────────────
+
+export interface ObjectVersion {
+  versionId: string;
+  lastModified: Date;
+  size: number;
+  etag: string;
+  isLatest: boolean;
+}
 
 // ─── Remote Object Descriptor ────────────────────────────────────────────────
 

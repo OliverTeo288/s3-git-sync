@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { LocalDB } from "../src/localdb";
+import { LocalDB } from "../src/sync/localdb";
 import type { SyncRecord, SyncHistoryEntry } from "../src/types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

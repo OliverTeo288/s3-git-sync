@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dryRunStats } from "../src/syncEngine";
+import { dryRunStats } from "../src/sync/engine";
 import type { FileChange } from "../src/types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -108,32 +108,32 @@ describe("dryRunStats", () => {
 describe("validateAccessKeyId (from s3client)", () => {
   // Dynamic import to avoid bundling the full AWS SDK
   it("accepts valid AKIA key", async () => {
-    const { validateAccessKeyId } = await import("../src/s3client");
+    const { validateAccessKeyId } = await import("../src/s3/client");
     expect(validateAccessKeyId("AKIAIOSFODNN7EXAMPLE")).toBeNull();
   });
 
   it("accepts valid ASIA (session) key", async () => {
-    const { validateAccessKeyId } = await import("../src/s3client");
+    const { validateAccessKeyId } = await import("../src/s3/client");
     expect(validateAccessKeyId("ASIAIOSFODNN7EXAMPLE")).toBeNull();
   });
 
   it("rejects empty string", async () => {
-    const { validateAccessKeyId } = await import("../src/s3client");
+    const { validateAccessKeyId } = await import("../src/s3/client");
     expect(validateAccessKeyId("")).not.toBeNull();
   });
 
   it("rejects key that is too short", async () => {
-    const { validateAccessKeyId } = await import("../src/s3client");
+    const { validateAccessKeyId } = await import("../src/s3/client");
     expect(validateAccessKeyId("AKIA123")).not.toBeNull();
   });
 
   it("rejects key with lowercase letters", async () => {
-    const { validateAccessKeyId } = await import("../src/s3client");
+    const { validateAccessKeyId } = await import("../src/s3/client");
     expect(validateAccessKeyId("akiaiosfodnn7example")).not.toBeNull();
   });
 
   it("rejects key that doesn't start with AKIA/ASIA/AROA/AIDA", async () => {
-    const { validateAccessKeyId } = await import("../src/s3client");
+    const { validateAccessKeyId } = await import("../src/s3/client");
     expect(validateAccessKeyId("XXXX0000000000000000")).not.toBeNull();
   });
 });
@@ -142,7 +142,7 @@ describe("validateAccessKeyId (from s3client)", () => {
 
 describe("S3ClientWrapper — prefix handling", () => {
   it("normalises prefix to always end with /", async () => {
-    const { S3ClientWrapper } = await import("../src/s3client");
+    const { S3ClientWrapper } = await import("../src/s3/client");
     const cfg = {
       authMethod: "static" as const,
       s3AccessKeyID: "AKIAIOSFODNN7EXAMPLE",
@@ -159,7 +159,7 @@ describe("S3ClientWrapper — prefix handling", () => {
   });
 
   it("returns empty prefix when s3Prefix is blank", async () => {
-    const { S3ClientWrapper } = await import("../src/s3client");
+    const { S3ClientWrapper } = await import("../src/s3/client");
     const cfg = {
       authMethod: "static" as const,
       s3AccessKeyID: "AKIAIOSFODNN7EXAMPLE",
@@ -176,7 +176,7 @@ describe("S3ClientWrapper — prefix handling", () => {
   });
 
   it("converts vault keys to S3 keys using the prefix", async () => {
-    const { S3ClientWrapper } = await import("../src/s3client");
+    const { S3ClientWrapper } = await import("../src/s3/client");
     const cfg = {
       authMethod: "static" as const,
       s3AccessKeyID: "AKIAIOSFODNN7EXAMPLE",
@@ -193,7 +193,7 @@ describe("S3ClientWrapper — prefix handling", () => {
   });
 
   it("strips the prefix when converting S3 keys back to vault keys", async () => {
-    const { S3ClientWrapper } = await import("../src/s3client");
+    const { S3ClientWrapper } = await import("../src/s3/client");
     const cfg = {
       authMethod: "static" as const,
       s3AccessKeyID: "AKIAIOSFODNN7EXAMPLE",
