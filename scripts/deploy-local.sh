@@ -44,10 +44,16 @@ echo "🔌  Plugin : $PLUGIN_ID"
 echo "📂  Target : $PLUGIN_DIR"
 echo ""
 
+# ── Install dependencies ──────────────────────────────────────────────────────
+
+echo "📥  Installing dependencies…"
+npm install --prefer-offline 2>&1 | tail -1
+echo ""
+
 # ── Build ─────────────────────────────────────────────────────────────────────
 
 echo "🔨  Building…"
-node esbuild.config.mjs  # development build (with sourcemaps)
+npm run build  # type-checks then produces production bundle
 echo ""
 
 # ── Deploy ────────────────────────────────────────────────────────────────────

@@ -642,3 +642,184 @@
   text-decoration: underline;
 }
 
+/* ─── Backup modal ───────────────────────────────────────────────────────────── */
+
+.s3sync-backup-summary {
+  font-size: 0.9em;
+  color: var(--text-muted);
+  margin: 0 0 14px;
+}
+
+.s3sync-backup-progress {
+  margin: 12px 0;
+}
+
+.s3sync-backup-bar-wrap {
+  height: 6px;
+  background: var(--background-modifier-border);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.s3sync-backup-bar-fill {
+  height: 100%;
+  width: var(--s3sync-bar-pct, 0%);
+  background: var(--interactive-accent);
+  border-radius: 3px;
+  transition: width 200ms ease;
+}
+
+.s3sync-backup-progress-text {
+  font-size: 0.8em;
+  font-family: var(--font-monospace);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Ribbon badge ───────────────────────────────────────────────────────────── */
+
+.s3sync-ribbon {
+  position: relative;
+}
+
+.s3sync-ribbon-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: var(--color-red);
+  color: #fff;
+  border-radius: 8px;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 4px;
+  min-width: 14px;
+  height: 14px;
+  line-height: 12px;
+  text-align: center;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ─── Version history button (⏱ in file rows) ───────────────────────────────── */
+
+.s3sync-versions-btn {
+  flex-shrink: 0;
+  font-size: 0.78em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-muted);
+}
+
+.s3sync-versions-btn:hover {
+  border-color: var(--interactive-accent);
+  color: var(--interactive-accent);
+}
+
+/* ─── File Version Modal ─────────────────────────────────────────────────────── */
+
+.s3sync-version-filename {
+  font-family: var(--font-monospace);
+  font-size: 0.9em;
+  color: var(--text-muted);
+  margin: -4px 0 12px;
+}
+
+.s3sync-version-hint {
+  font-size: 0.82em;
+  color: var(--text-muted);
+  margin: 0 0 10px;
+}
+
+.s3sync-version-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.s3sync-version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 5px;
+  background: var(--background-secondary);
+}
+
+.s3sync-version-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.s3sync-version-current-badge {
+  flex-shrink: 0;
+  font-size: 0.65em;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(var(--color-green-rgb), 0.2);
+  color: var(--color-green);
+  letter-spacing: 0.05em;
+}
+
+.s3sync-version-time {
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
+.s3sync-version-meta {
+  font-size: 0.78em;
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  white-space: nowrap;
+}
+
+.s3sync-version-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.s3sync-version-actions button {
+  font-size: 0.8em;
+  padding: 3px 10px;
+}
+
+.s3sync-version-close-btn {
+  display: block;
+  margin-top: 8px;
+}
+
+/* ─── Version Preview Modal ──────────────────────────────────────────────────── */
+
+.s3sync-version-preview-meta {
+  font-size: 0.82em;
+  color: var(--text-muted);
+  margin: -4px 0 10px;
+}
+
+.s3sync-version-preview {
+  background: var(--background-primary-alt);
+  border-radius: 4px;
+  padding: 10px 14px;
+  max-height: 400px;
+  overflow-y: auto;
+  font-size: 0.82em;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-bottom: 12px;
+}
+

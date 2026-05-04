@@ -26,6 +26,8 @@ The plugin maintains a **local sync record** (a snapshot of what was last synced
 | **Push only** | Uploads local changes to S3. Conflicts are resolved local-wins. |
 | **Pull only** | Downloads remote changes from S3. Conflicts are resolved remote-wins. |
 | **Sync History** | Browse a timestamped log of past sync operations with per-sync stats. |
+| **Version history** | Browse all S3 versions of any file, preview text content, and restore a previous version directly into your vault. Requires S3 versioning to be enabled on the bucket. |
+| **Export backup** | Download a ZIP of all files currently in S3 — a full point-in-time backup of your remote vault. |
 
 ### Change detection
 
@@ -33,6 +35,7 @@ The plugin maintains a **local sync record** (a snapshot of what was last synced
 |---|---|
 | **Three-way diff** | Compares local state, remote state, and last-sync snapshot to correctly classify every change: new, modified, deleted, or conflicted. |
 | **ETag-based remote detection** | Uses S3 object ETags (content hashes) to detect remote modifications without downloading file content. |
+| **Content-hash deduplication** | When only the file timestamp changed (not the content), the plugin computes an MD5 hash and skips uploading if the content is identical to what is already on S3. Desktop only. |
 | **1-second mtime tolerance** | Avoids false positives from filesystem timestamp resolution differences across platforms. |
 
 ### Conflict handling
@@ -41,7 +44,7 @@ The plugin maintains a **local sync record** (a snapshot of what was last synced
 |---|---|
 | **Explicit conflict surfacing** | Conflicts (both sides changed since last sync) are always shown explicitly — the plugin never silently overwrites your data. |
 | **Per-file resolution** | In View Changes, each conflict shows local vs remote timestamps and sizes, with **Keep Local** / **Keep Remote** buttons per file. |
-| **Conflict backup copies** | When remote wins, the local file is saved to `conflict/file.conflict-YYYY-MM-DD-HHMMSS.ext` before being overwritten so you can recover it. |
+| **Conflict backup copies** | When remote wins, the local file is saved to `conflict/file.conflict-YYYY-MM-DD-HHMMSS-mmm-xyz.ext` before being overwritten so you can recover it. The `conflict/` folder is excluded from future syncs by default. |
 | **Quick Sync skips conflicts** | Quick Sync skips conflicts and shows a notice telling you how many need manual resolution in View Changes. |
 | **Directional resolution** | Push resolves conflicts local-wins; Pull resolves conflicts remote-wins. |
 
@@ -51,7 +54,7 @@ The plugin maintains a **local sync record** (a snapshot of what was last synced
 |---|---|
 | **Static credentials** | Access Key ID + Secret stored in the plugin's `data.json`. Password-masked fields in the UI. |
 | **AWS Named Profile** (desktop only) | Reads `~/.aws/credentials` and `~/.aws/config` via the full AWS SDK credential chain. Credentials are never stored by the plugin. Supports SSO, assume-role, MFA, and all standard AWS auth flows. |
-| **SSO expiry handling** | When an SSO session expires, the plugin shows the exact `aws sso login` command to run in a terminal and the profile name to use. |
+| **SSO expiry handling** | When an SSO session expires, the plugin shows the exact `aws sso login` command to run in a terminal with the correct profile name. |
 
 ### Reliability
 
@@ -60,23 +63,24 @@ The plugin maintains a **local sync record** (a snapshot of what was last synced
 | **Multipart upload** | Files over 5 MB are automatically uploaded via the S3 multipart API, avoiding single-PUT size limits. |
 | **CORS bypass on desktop** | Routes all S3 HTTP calls through Obsidian's `requestUrl` (Electron's native `net` module) to avoid cross-origin restrictions on arbitrary S3 endpoints. |
 | **Retry-safe** | Local sync records are only written after a successful S3 operation. A failed sync is always safe to retry. |
+| **Path traversal protection** | All S3 keys are validated before any vault write — keys containing `..` segments, absolute paths, backslashes, or NUL bytes are rejected. |
 
 ### Usability
 
 | Feature | Description |
 |---|---|
+| **Ribbon badge** | The ribbon icon shows a live count of pending changes, polled on a configurable interval. Clears immediately after a successful sync. |
 | **Status bar** | Live sync state in the Obsidian status bar: Ready / Syncing N/M / Synced 14:32 / Error. |
-| **Ribbon icon** | One-click access to View Changes. |
 | **Command palette** | All sync actions are registered as commands and can be bound to hotkeys. |
 | **File type badges** | Each changed file shows its type badge (MD, PDF, PNG, JSON…) in the modal for quick scanning. |
 | **Two-line path display** | Long file paths show filename prominently on the first line, directory path muted below — always readable. |
-| **Ignore patterns** | Glob patterns (`*`, `?`) to exclude files from sync. |
+| **Ignore patterns** | Glob patterns (`*`, `?`) to exclude files from sync. The `conflict/` folder is ignored by default. |
 | **Remote prefix** | Key prefix inside the bucket (e.g. `work-vault/`) so multiple vaults can share one bucket. |
 | **Force path-style URLs** | Required for MinIO and other self-hosted S3 implementations. |
 | **Connection test** | Verify credentials and bucket access before the first sync. |
 | **Reset sync state** | Clears all local sync records so the next run treats everything as a fresh first sync. |
+| **Settings export / import** | Export all settings to JSON (credentials excluded) and import on another device. |
 | **Structured error codes** | All errors include a `[S3S-Exx]` code for quick lookup in the troubleshooting table below. |
-
 
 ---
 
@@ -85,6 +89,14 @@ The plugin maintains a **local sync record** (a snapshot of what was last synced
 ### 1. Create an S3 bucket
 
 Create a private bucket in your AWS region of choice. Block all public access. Note the bucket name and region.
+
+To use version history, enable versioning on the bucket:
+
+```sh
+aws s3api put-bucket-versioning \
+  --bucket YOUR-BUCKET-NAME \
+  --versioning-configuration Status=Enabled
+```
 
 ### 2. Set up credentials
 
@@ -131,7 +143,7 @@ Click **Test connection** to verify everything is wired up.
 
 ### View Changes (the main workflow)
 
-Click the refresh icon in the ribbon, or run **S3 Git Sync: View changes (Git status)** from the command palette.
+Click the ribbon icon, or run **S3 Git Sync: View changes (Git status)** from the command palette.
 
 The modal shows all pending changes:
 
@@ -145,7 +157,7 @@ The modal shows all pending changes:
 | Delete locally | File deleted from S3 since last sync |
 | Conflicts | Both sides changed since last sync |
 
-Check or uncheck individual files, resolve any conflicts per-file, write an optional sync message, and click **Sync**.
+Check or uncheck individual files, resolve any conflicts per-file, write an optional sync message, and click **Sync**. The ribbon badge updates immediately once the sync completes.
 
 For text files in the Modified sections, click **▶ diff** to see a line-by-line diff of local vs remote before committing.
 
@@ -174,7 +186,23 @@ Conflicts in push are resolved local-wins. Conflicts in pull are resolved remote
 S3 Git Sync: View sync history (Git log)
 ```
 
-Shows the last 50 sync operations with timestamps, optional messages, and per-sync stats (↑ uploaded, ↓ downloaded, ✕ deleted, ⚠ conflicts, ⛔ errors).
+Shows the last 100 sync operations with timestamps, optional messages, and per-sync stats (↑ uploaded, ↓ downloaded, ✕ deleted, ⚠ conflicts, ⛔ errors).
+
+### Version history
+
+```
+S3 Git Sync: View version history for active file
+```
+
+Opens a list of all S3 versions for the currently active file. For text files, click **Preview** to read the content before restoring. Click **Restore** to write that version back to your local vault. Requires S3 versioning to be enabled on the bucket.
+
+### Export backup
+
+```
+S3 Git Sync: Export S3 backup (download all files as ZIP)
+```
+
+Downloads every file currently in S3 and packages them into a ZIP with the vault's folder structure intact. Useful for point-in-time backups before major changes.
 
 ---
 
@@ -183,10 +211,13 @@ Shows the last 50 sync operations with timestamps, optional messages, and per-sy
 | Setting | Default | Description |
 |---|---|---|
 | Authentication method | Static | Static credentials or AWS Named Profile |
-| Ignore patterns | workspace files | One glob pattern per line. Supports `*` and `?`. |
+| Ignore patterns | `conflict/*` | One glob pattern per line. Supports `*` and `?`. The `conflict/` folder is always included. |
 | Remote prefix | _(empty)_ | Key prefix inside the bucket |
 | Force path-style URLs | Off | Enable for MinIO and self-hosted S3 |
 | Show status bar | On | Show sync state in the Obsidian status bar |
+| Badge poll interval | 5 min | How often the ribbon badge count is refreshed in the background. Set to 0 to disable polling. |
+| Export settings | — | Download all settings as JSON (credentials excluded) |
+| Import settings | — | Load settings from a previously exported JSON file (credentials on this device are not overwritten) |
 
 ---
 
@@ -241,7 +272,7 @@ All errors include a bracketed code, e.g. `[S3S-E04] InvalidClientTokenId`.
 | `S3S-E03` | Network error or request timed out | Check your internet connection; verify the bucket region and endpoint URL are correct |
 | `S3S-E04` | Invalid or missing credentials | Re-enter your Access Key ID and Secret; check they have not been revoked in IAM |
 | `S3S-E05` | Bucket not found | Verify the bucket name and region; confirm the bucket exists in your AWS account |
-| `S3S-E06` | Access denied | Check the IAM policy includes the four required actions on the correct bucket ARN (see below) |
+| `S3S-E06` | Access denied | Check the IAM policy includes the required actions on the correct bucket ARN (see below) |
 | `S3S-E99` | Unexpected error | Open the developer console (`Ctrl/Cmd+Shift+I`) for the full stack trace and open a GitHub issue |
 
 ### Minimum IAM policy
@@ -268,6 +299,19 @@ All errors include a bracketed code, e.g. `[S3S-E04] InvalidClientTokenId`.
 }
 ```
 
+To use version history, add `s3:ListObjectVersions` and `s3:GetObjectVersion`:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "s3:ListObjectVersions",
+    "s3:GetObjectVersion"
+  ],
+  "Resource": "arn:aws:s3:::YOUR-BUCKET-NAME/*"
+}
+```
+
 ---
 
 ## Technical reference
@@ -279,18 +323,19 @@ Obsidian vault (local files)
         │
         │  vault.getFiles() + adapter.readBinary/writeBinary
         ▼
-  differ.ts  ←── LocalDB (localforage, persisted sync records)
-        │              ↑
-        │  3-way diff  │ bulkUpsertSyncRecords after each successful sync
+  sync/differ.ts  ←── LocalDB (localforage, persisted sync records)
+        │                    ↑
+        │  3-way diff        │ bulkUpsertSyncRecords after each successful sync
         ▼
   FileChange[]  (local_new / local_modified / local_deleted /
                  remote_new / remote_modified / remote_deleted / conflict)
         │
         ▼
-  syncEngine.ts
+  sync/engine.ts
         │
-        │  S3ClientWrapper (ObsHttpHandler via requestUrl on desktop,
-        │                    FetchHttpHandler on mobile)
+        │  s3/client.ts — S3ClientWrapper
+        │  (ObsHttpHandler via requestUrl on desktop,
+        │   FetchHttpHandler on mobile)
         ▼
   S3 bucket
 ```
@@ -299,26 +344,41 @@ Obsidian vault (local files)
 
 ```
 src/
-  main.ts          Plugin entry point, lifecycle, commands
-  s3client.ts      S3ClientWrapper, credential resolution, ObsHttpHandler, SSO helpers
-  differ.ts        3-way diff engine (computeChanges, groupChanges)
-  syncEngine.ts    executeSync, dryRunStats, conflict resolution
-  localdb.ts       LocalForage wrappers for sync records and history
-  changeView.ts    ChangeViewModal, HistoryModal
-  settings.ts      PluginSettingTab
-  types.ts         All shared types and interfaces
+  main.ts              Plugin entry point, lifecycle, commands, ribbon badge
+  types.ts             All shared types and interfaces
+  utils.ts             Shared utilities (error messages, blob download, URL open, path safety)
+  s3/
+    client.ts          S3ClientWrapper, credential resolution, ObsHttpHandler
+    errors.ts          Error codes, SSOSessionExpiredError, credential redaction
+    ssoHelper.ts       AWS config parsing, CLI SSO login launcher
+  sync/
+    differ.ts          3-way diff engine (computeChanges, groupChanges)
+    diffEngine.ts      LCS-based line diff for inline preview
+    engine.ts          executeSync, dryRunStats, conflict backup
+    backup.ts          Concurrent S3 download + ZIP packaging for export
+    localdb.ts         LocalForage wrappers for sync records and history
+  ui/
+    changeView.ts      ChangeViewModal (main sync UI)
+    historyModal.ts    HistoryModal (sync log)
+    versionModals.ts   FileVersionModal, VersionPreviewModal
+    backupModal.ts     BackupModal (ZIP export progress UI)
+    settings.ts        PluginSettingTab
+    uiHelpers.ts       Shared formatters, path helpers, error banner
 tests/
-  differ.test.ts        3-way diff engine, ignore patterns, content-hash de-dup
-  syncEngine.test.ts    dryRunStats, validateAccessKeyId, S3ClientWrapper prefix
-  localdb.test.ts       LocalDB upsert / get / delete / history pruning
-  s3client.test.ts      errorCode classifier, parseAWSConfigForSSO
-  integration/          S3 + full-sync scenarios against LocalStack
-  __mocks__/            Obsidian and localforage stubs for unit tests
+  differ.test.ts            3-way diff engine, ignore patterns, content-hash dedup
+  syncEngine.test.ts        dryRunStats
+  localdb.test.ts           LocalDB upsert / get / delete / history pruning
+  s3client.test.ts          errorCode classifier, parseAWSConfigForSSO, S3ClientWrapper
+  backup.test.ts            downloadAll concurrency, buildZip, backupFilename
+  utils.test.ts             assertSafeVaultKey, assertSafeProfileName
+  features.test.ts          End-to-end feature smoke tests
+  integration/              Full sync scenarios against LocalStack
+  __mocks__/                Obsidian and localforage stubs for unit tests
 ```
 
 ### Local development
 
-**Prerequisites:** Node.js 25, npm
+**Prerequisites:** Node.js 20+, npm
 
 ```sh
 # Install dependencies
@@ -327,8 +387,11 @@ npm install
 # Development build with watch mode (rebuilds on file change)
 npm run dev
 
-# Production build
+# Production build (type-checks then bundles)
 npm run build
+
+# Lint
+npm run lint
 
 # Run tests
 npm test
@@ -337,14 +400,15 @@ npm test
 npm run test:coverage
 ```
 
-Copy (or symlink) the output files into your Obsidian vault to test:
+**Deploy to a local vault** (builds and copies artefacts in one step):
 
 ```sh
-cp main.js manifest.json styles.css \
-  /path/to/vault/.obsidian/plugins/s3-git-sync/
+./scripts/deploy-local.sh /path/to/your/vault
+# or set OBSIDIAN_VAULT and run without arguments
+OBSIDIAN_VAULT=~/Documents/MyVault ./scripts/deploy-local.sh
 ```
 
-Then reload Obsidian (`Ctrl/Cmd+R` with the developer console open, or disable/enable the plugin).
+Then reload the plugin in Obsidian: **Settings → Community Plugins → S3 Git Sync → Reload**.
 
 ### Running tests
 
@@ -354,16 +418,18 @@ npm run test:watch    # watch mode
 npm run test:coverage # coverage report (HTML in coverage/)
 ```
 
-Tests use [Vitest](https://vitest.dev) with in-memory stubs for the Obsidian API and localforage. The test suite covers the diff engine and sync executor; UI components (modals, settings tab) are not unit-tested.
+Tests use [Vitest](https://vitest.dev) with in-memory stubs for the Obsidian API and localforage. Integration tests require Docker (LocalStack) and are skipped in the default `npm test` run.
 
 ### Tech stack
 
 | Layer | Library |
 |---|---|
 | Bundler | esbuild |
-| Language | TypeScript 5 |
+| Language | TypeScript 6 |
 | S3 client | `@aws-sdk/client-s3`, `@aws-sdk/lib-storage` |
 | Credential chain | `@aws-sdk/credential-providers` |
 | Local storage | localforage (IndexedDB) |
+| ZIP packaging | fflate |
 | ID generation | nanoid |
+| Linter | ESLint 10 + `eslint-plugin-obsidianmd` + `@typescript-eslint` |
 | Test runner | Vitest |

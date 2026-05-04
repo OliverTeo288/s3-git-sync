@@ -1,7 +1,7 @@
 import { Platform, type Vault } from "obsidian";
 import type { LocalDB } from "./localdb";
-import type { S3ClientWrapper } from "./s3client";
-import type { FileChange, RemoteObject, S3GitSyncSettings } from "./types";
+import type { S3ClientWrapper } from "../s3/client";
+import type { FileChange, RemoteObject, S3GitSyncSettings } from "../types";
 
 // ─── Pattern Matching ─────────────────────────────────────────────────────────
 
@@ -36,20 +36,23 @@ type CryptoModule = {
   };
 };
 
+// Memoised so the module loader is only hit once per session.
+let _cryptoCache: CryptoModule | null | undefined;
+
 async function loadCrypto(): Promise<CryptoModule | null> {
+  if (_cryptoCache !== undefined) return _cryptoCache;
   // Electron desktop renderer: CommonJS require is on globalThis.
   // eslint-disable-next-line obsidianmd/prefer-active-doc -- accessing Electron's CommonJS require, not the document
   const rq = (globalThis as Record<string, unknown>)["require"];
   if (typeof rq === "function") {
-    try { return (rq as (id: string) => unknown)("crypto") as CryptoModule; }
+    try { return (_cryptoCache = (rq as (id: string) => unknown)("crypto") as CryptoModule); }
     catch { /* fall through */ }
   }
-  // Node ESM (vitest unit tests): dynamic import. `node:*` is marked
-  // external in esbuild.config.mjs so this stays untouched at bundle
-  // time, and the whole loadCrypto call is guarded by Platform.isDesktop.
-  // eslint-disable-next-line obsidianmd/no-nodejs-modules -- desktop-only fallback path; mobile is short-circuited above via Platform.isDesktop
-  try { return await import("node:crypto"); }
-  catch { return null; }
+  // Node ESM (vitest unit tests): `node:*` is external in esbuild so this
+  // branch is only reachable in the test runner, never in Obsidian.
+  // eslint-disable-next-line obsidianmd/no-nodejs-modules -- desktop-only fallback path; mobile is short-circuited via Platform.isDesktop
+  try { return (_cryptoCache = await import("node:crypto") as unknown as CryptoModule); }
+  catch { return (_cryptoCache = null); }
 }
 
 async function computeMd5Hex(data: ArrayBuffer): Promise<string | null> {
@@ -87,20 +90,16 @@ export async function computeChanges(
 ): Promise<DiffResult> {
   const ignorePatterns = settings.ignorePatterns;
 
-  // 1. Gather local files
   const localFiles = vault.getFiles().filter((f) => !isIgnored(f.path, ignorePatterns));
   const localMap = new Map(localFiles.map((f) => [f.path, f]));
 
-  // 2. Gather remote objects
   const remoteObjects: RemoteObject[] = await s3.listObjects();
   const remoteMap = new Map(
     remoteObjects.filter((o) => !isIgnored(o.vaultKey, ignorePatterns)).map((o) => [o.vaultKey, o])
   );
 
-  // 3. Load last sync records
   const syncedMap = await db.getAllSyncRecords();
 
-  // 4. Build the union of all known keys
   const allKeys = new Set<string>([
     ...localMap.keys(),
     ...remoteMap.keys(),
@@ -243,8 +242,8 @@ export async function computeChanges(
     }
   }
 
-  // Sort for stable, predictable ordering
-  changes.sort((a, b) => a.key.localeCompare(b.key));
+  // Stable sort by vault key — byte comparison is sufficient for ASCII-dominant paths.
+  changes.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
   return {
     changes,

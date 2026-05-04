@@ -1,19 +1,25 @@
-import { Notice, Platform, Plugin } from "obsidian";
-import { ChangeViewModal, HistoryModal } from "./changeView";
-import { computeChanges } from "./differ"; // still used by quickSync / directedSync
-import { LocalDB } from "./localdb";
-import { S3ClientWrapper, SSOSessionExpiredError } from "./s3client";
-import { S3GitSyncSettingTab } from "./settings";
-import { executeSync } from "./syncEngine";
-import { DEFAULT_SETTINGS, type S3GitSyncSettings } from "./types";
+import { Notice, Plugin } from "obsidian";
+import { BackupModal, ChangeViewModal, FileVersionModal, HistoryModal } from "./ui/changeView";
+import { computeChanges } from "./sync/differ";
+import { LocalDB } from "./sync/localdb";
+import { S3ClientWrapper } from "./s3/client";
+import { SSOSessionExpiredError, ssoRelogCommand } from "./s3/errors";
+import { S3GitSyncSettingTab } from "./ui/settings";
+import { executeSync, type SyncOptions } from "./sync/engine";
+import { DEFAULT_SETTINGS, type FileChange, type S3GitSyncSettings } from "./types";
+import { extractErrorMessage, openExternalUrl, triggerBlobDownload } from "./utils";
 
 export default class S3GitSyncPlugin extends Plugin {
   settings!: S3GitSyncSettings;
   db!: LocalDB;
 
   private s3Client!: S3ClientWrapper;
-  private statusBarEl?: HTMLElement;
+  private statusBarItem!: HTMLElement;
+  private statusBarEl!: HTMLElement;
+  private ribbonEl?: HTMLElement;
+  private badgePollTimer?: ReturnType<typeof activeWindow.setInterval>;
   private isSyncing = false;
+  private lastBadgeCount = -1;
 
   // ── Lifecycle ────────────────────────────────────────────────────────────────
 
@@ -25,307 +31,282 @@ export default class S3GitSyncPlugin extends Plugin {
 
     this.addSettingTab(new S3GitSyncSettingTab(this.app, this));
 
-    // Ribbon: click to open change view
-    this.addRibbonIcon("refresh-cw", "S3 Git sync — view changes", () => {
+    this.ribbonEl = this.addRibbonIcon("refresh-cw", "S3 Git sync — view changes", () => {
       this.openChangeView();
     });
+    this.ribbonEl.addClass("s3sync-ribbon");
 
-    // Status bar
+    this.statusBarItem = this.addStatusBarItem();
+    this.statusBarEl = this.statusBarItem.createSpan({ cls: "s3sync-statusbar" });
     if (this.settings.showStatusBar) {
-      const item = this.addStatusBarItem();
-      this.statusBarEl = item.createSpan({ cls: "s3sync-statusbar" });
       this.updateStatusBar("Ready");
+    } else {
+      this.statusBarItem.hide();
     }
 
-    // ── Commands ─────────────────────────────────────────────────────────────
-
+    this.addCommand({ id: "view-changes", name: "View changes (Git status)", icon: "diff", callback: () => this.openChangeView() });
+    this.addCommand({ id: "quick-sync", name: "Quick sync (all changes, default resolutions)", icon: "refresh-cw", callback: () => this.quickSync() });
+    this.addCommand({ id: "push-only", name: "Push only (local → S3)", icon: "upload", callback: () => this.directedSync("push") });
+    this.addCommand({ id: "pull-only", name: "Pull only (S3 → local)", icon: "download", callback: () => this.directedSync("pull") });
+    this.addCommand({ id: "view-history", name: "View sync history (Git log)", icon: "history", callback: () => new HistoryModal(this.app, this.db).open() });
+    this.addCommand({ id: "view-version-history", name: "View version history for active file", icon: "clock", callback: () => this.openVersionHistory() });
     this.addCommand({
-      id: "view-changes",
-      name: "View changes (Git status)",
-      icon: "diff",
-      callback: () => this.openChangeView(),
+      id: "export-backup",
+      // eslint-disable-next-line obsidianmd/ui/sentence-case
+      name: "Export S3 backup (download all files as ZIP)",
+      icon: "archive",
+      callback: () => this.exportBackup(),
     });
 
-    this.addCommand({
-      id: "quick-sync",
-      name: "Quick sync (all changes, default resolutions)",
-      icon: "refresh-cw",
-      callback: () => this.quickSync(),
-    });
-
-    this.addCommand({
-      id: "push-only",
-      name: "Push only (local → S3)",
-      icon: "upload",
-      callback: () => this.directedSync("push"),
-    });
-
-    this.addCommand({
-      id: "pull-only",
-      name: "Pull only (S3 → local)",
-      icon: "download",
-      callback: () => this.directedSync("pull"),
-    });
-
-    this.addCommand({
-      id: "view-history",
-      name: "View sync history (Git log)",
-      icon: "history",
-      callback: () => new HistoryModal(this.app, this.db).open(),
-    });
-
+    if (this.settings.badgePollIntervalMin > 0) this.startBadgePoll();
   }
+
+  onunload() { this.stopBadgePoll(); }
 
   // ── Settings ──────────────────────────────────────────────────────────────────
 
   async loadSettings() {
     const saved = (await this.loadData()) as Partial<S3GitSyncSettings> | null;
     this.settings = { ...DEFAULT_SETTINGS, ...(saved ?? {}) };
-    // Deep-merge S3 config
     this.settings.s3 = { ...DEFAULT_SETTINGS.s3, ...(saved?.s3 ?? {}) };
 
-    // First-run: prepend workspace files (resolved against the user's actual config dir)
-    // to the default ignore list so we never sync them.
     if (saved == null) {
       const dir = this.app.vault.configDir;
-      this.settings.ignorePatterns = [
-        `${dir}/workspace.json`,
-        `${dir}/workspace-mobile.json`,
-        ...this.settings.ignorePatterns,
-      ];
+      this.settings.ignorePatterns = [`${dir}/workspace.json`, `${dir}/workspace-mobile.json`, ...this.settings.ignorePatterns];
+    }
+
+    // Always ensure built-in required patterns are present, even for existing
+    // installs whose saved settings predate them being added as defaults.
+    const required = DEFAULT_SETTINGS.ignorePatterns;
+    for (const p of required) {
+      if (!this.settings.ignorePatterns.includes(p)) {
+        this.settings.ignorePatterns.push(p);
+      }
     }
   }
 
   async saveSettings() {
     await this.saveData(this.settings);
-    // Rebuild the S3 client whenever credentials change
     this.s3Client = new S3ClientWrapper(this.settings.s3);
   }
 
-  /** Expose the current S3 client to the settings tab for connection testing */
-  getS3Client(): S3ClientWrapper {
-    return this.s3Client;
-  }
+  getS3Client(): S3ClientWrapper { return this.s3Client; }
 
   // ── Status bar ────────────────────────────────────────────────────────────────
 
   updateStatusBar(msg: string) {
-    if (!this.statusBarEl) return;
-    // Unicode cloud icon keeps it compact and visually distinct in the status bar
+    if (!this.settings.showStatusBar) return;
     this.statusBarEl.setText(`☁ ${msg}`);
+  }
+
+  setStatusBarVisible(visible: boolean) {
+    if (visible) { this.statusBarItem.show(); this.updateStatusBar("Ready"); }
+    else { this.statusBarItem.hide(); }
+  }
+
+  // ── Ribbon badge ──────────────────────────────────────────────────────────────
+
+  updateRibbonBadge(count: number) {
+    if (!this.ribbonEl || count === this.lastBadgeCount) return;
+    this.lastBadgeCount = count;
+    this.ribbonEl.querySelector(".s3sync-ribbon-badge")?.remove();
+    if (count > 0) {
+      const badge = this.ribbonEl.createSpan({ cls: "s3sync-ribbon-badge" });
+      badge.setText(count > 99 ? "99+" : String(count));
+    }
+    this.ribbonEl.title = count > 0
+      ? `S3 Git Sync — ${count} pending change${count !== 1 ? "s" : ""}`
+      : "S3 Git Sync — view changes";
+  }
+
+  startBadgePoll() {
+    this.stopBadgePoll();
+    if (this.settings.badgePollIntervalMin <= 0) return;
+    this.badgePollTimer = activeWindow.setInterval(() => this.refreshBadge(), this.settings.badgePollIntervalMin * 60_000);
+    void this.refreshBadge();
+  }
+
+  stopBadgePoll() {
+    if (this.badgePollTimer != null) {
+      activeWindow.clearInterval(this.badgePollTimer);
+      this.badgePollTimer = undefined;
+    }
+  }
+
+  restartBadgePoll() { this.startBadgePoll(); }
+
+  private async refreshBadge() {
+    if (this.isSyncing) return;
+    try {
+      const { changes } = await computeChanges(this.app.vault, this.s3Client, this.db, this.settings);
+      this.updateRibbonBadge(changes.length);
+    } catch { /* badge poll failures are silent */ }
+  }
+
+  // ── Settings portability ──────────────────────────────────────────────────────
+
+  exportSettings() {
+    const { s3AccessKeyID: _id, s3SecretAccessKey: _secret, ...safeS3 } = this.settings.s3;
+    const json = JSON.stringify({ ...this.settings, s3: safeS3 }, null, 2);
+    triggerBlobDownload(json, `s3-git-sync-settings-${new Date().toISOString().slice(0, 10)}.json`, "application/json");
+    new Notice("Settings exported (credentials excluded).", 4000);
+  }
+
+  importSettings() {
+    const input = activeDocument.createEl("input");
+    input.type = "file";
+    input.accept = ".json";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      input.remove(); // prevent DOM leak
+      if (!file) return;
+      try {
+        const parsed = JSON.parse(await file.text()) as Partial<S3GitSyncSettings>;
+        const { s3: parsedS3, ...rest } = parsed;
+        this.settings = {
+          ...this.settings, ...rest,
+          s3: { ...this.settings.s3, ...parsedS3, s3AccessKeyID: this.settings.s3.s3AccessKeyID, s3SecretAccessKey: this.settings.s3.s3SecretAccessKey },
+        };
+        await this.saveSettings();
+        new Notice("Settings imported. Credentials were not overwritten.", 5000);
+      } catch (err: unknown) {
+        new Notice(`Failed to import settings: ${extractErrorMessage(err)}`, 5000);
+      }
+    };
+    input.click();
+  }
+
+  // ── Version history / backup ──────────────────────────────────────────────────
+
+  openVersionHistory() {
+    const file = this.app.workspace.getActiveFile();
+    if (!file) { new Notice("No active file."); return; }
+    const s3Key = this.s3Client.vaultKeyToS3Key(file.path);
+    new FileVersionModal(this.app, this.app.vault, this.s3Client, file.path, s3Key).open();
+  }
+
+  exportBackup() {
+    new BackupModal(this.app, this.s3Client, this.app.vault.getName()).open();
   }
 
   // ── Error handling ────────────────────────────────────────────────────────────
 
-  /**
-   * Open a URL in the system default browser.
-   * electron.shell is a main-process API and is not accessible from the renderer;
-   * spawning the OS-native open command via child_process is the reliable path.
-   */
-  openExternalBrowser(url: string): void {
-    if (Platform.isDesktop) {
-      try {
-        // eslint-disable-next-line obsidianmd/prefer-active-doc -- accessing Electron's CommonJS require, not the document
-        const req = (globalThis as Record<string, unknown>)["require"] as (id: string) => unknown;
-        const { platform } = req("process") as { platform: string };
-        const cp = req("child_process") as {
-          spawn: (cmd: string, args: string[], opts: object) => { unref: () => void };
-        };
-        if (platform === "darwin") {
-          cp.spawn("open", [url], { detached: true }).unref();
-        } else if (platform === "win32") {
-          cp.spawn("cmd", ["/c", "start", "", url], { detached: true }).unref();
-        } else {
-          cp.spawn("xdg-open", [url], { detached: true }).unref();
-        }
-        return;
-      } catch { /* fall through */ }
-    }
-    window.open(url, "_blank");
-  }
+  openExternalBrowser(url: string): void { openExternalUrl(url); }
 
-  /**
-   * Unified sync error handler. Detects expired SSO sessions and opens the
-   * browser for re-authentication; shows a generic notice for all other errors.
-   */
   handleSyncError(err: unknown, prefix: string): void {
     if (err instanceof SSOSessionExpiredError) {
       new Notice(
-        `AWS SSO session expired.\n\nRun in a terminal:\n  aws sso login --profile ${err.profileName}\n\nThen retry the sync.`,
+        `AWS SSO session expired.\n\nRun in a terminal:\n  ${ssoRelogCommand(err.profileName)}\n\nThen retry the sync.`,
         15_000
       );
       return;
     }
-    const msg = err instanceof Error ? err.message : String(err);
-    new Notice(`${prefix}: ${msg}`, 8_000);
+    new Notice(`${prefix}: ${extractErrorMessage(err)}`, 8_000);
   }
 
   // ── Core sync actions ─────────────────────────────────────────────────────────
 
-  /** Open the change-preview modal — the full "git status + git commit" workflow */
   openChangeView() {
-    if (this.isSyncing) {
-      new Notice("A sync is already in progress.");
-      return;
-    }
+    if (this.isSyncing) { new Notice("A sync is already in progress."); return; }
     new ChangeViewModal(
-      this.app,
-      this.app.vault,
-      this.s3Client,
-      this.db,
-      this.settings
+      this.app, this.app.vault, this.s3Client, this.db, this.settings,
+      () => {
+        const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        this.updateStatusBar(`Synced ${ts}`);
+        void this.refreshBadge();
+      },
+      // Hold the global lock during modal sync so the badge poller and
+      // command-palette syncs can't run concurrently against the same DB.
+      (busy) => { this.isSyncing = busy; },
     ).open();
   }
 
-  /** Sync without the interactive modal — conflicts are skipped and flagged for manual resolution */
-  async quickSync() {
-    if (this.isSyncing) return;
-    this.isSyncing = true;
-    this.updateStatusBar("Syncing…");
+  async quickSync() { await this.performSync("quick"); }
+  async directedSync(direction: "push" | "pull") { await this.performSync(direction); }
 
-    const notice = new Notice("Syncing…", 0);
+  /**
+   * Shared sync scaffold for quick-sync and directed push/pull.
+   * Handles locking, progress notices, error handling, and badge refresh.
+   */
+  private async performSync(direction: "quick" | "push" | "pull"): Promise<void> {
+    if (this.isSyncing) { new Notice("A sync is already in progress."); return; }
+
+    const labels = { quick: "Syncing", push: "Pushing", pull: "Pulling" } as const;
+    const label = labels[direction];
+    this.isSyncing = true;
+    this.updateStatusBar(`${label}…`);
+    const notice = new Notice(`${label}…`, 0);
 
     try {
-      const { changes } = await computeChanges(
-        this.app.vault,
-        this.s3Client,
-        this.db,
-        this.settings
-      );
+      const { changes } = await computeChanges(this.app.vault, this.s3Client, this.db, this.settings);
+      const { syncable, opts } = this.filterChanges(direction, changes, notice);
+      if (!syncable) return; // early-exit already handled inside filterChanges
 
-      if (changes.length === 0) {
-        notice.hide();
-        this.updateStatusBar("Up to date");
-        new Notice("Everything is up to date.", 3000);
-        return;
-      }
-
-      const conflictCount = changes.filter((c) => c.changeType === "conflict").length;
-      const syncable = changes.filter((c) => c.changeType !== "conflict");
-
-      if (conflictCount > 0) {
-        new Notice(
-          `${conflictCount} conflict${conflictCount > 1 ? "s" : ""} need manual resolution — open View Changes to resolve them.`,
-          8_000
-        );
-      }
-
-      if (syncable.length === 0) {
-        notice.hide();
-        this.updateStatusBar("Up to date");
-        new Notice("Everything is up to date.", 3000);
-        return;
-      }
-
-      const stats = await executeSync(
-        syncable,
-        {},
-        this.app.vault,
-        this.s3Client,
-        this.db,
-        (done, total, file, _action) => {
+      const stats = await executeSync(syncable, opts, this.app.vault, this.s3Client, this.db,
+        (done, total, file) => {
           this.updateStatusBar(`${done + 1}/${total}`);
-          notice.setMessage(`Syncing ${done + 1}/${total}: ${file}`);
+          notice.setMessage(`${label} ${done + 1}/${total}: ${file}`);
         }
       );
 
       notice.hide();
-      const summary = [
-        stats.uploaded && `↑${stats.uploaded}`,
-        stats.downloaded && `↓${stats.downloaded}`,
-        stats.deletedFromS3 && `✕${stats.deletedFromS3}`,
-        stats.deletedFromLocal && `✕${stats.deletedFromLocal}`,
-      ]
-        .filter(Boolean)
-        .join(" ");
-
       const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      this.updateStatusBar(`Synced ${ts}`);
-      new Notice(`Sync complete: ${summary}`, 5000);
-      if (stats.errors.length > 0) {
-        new Notice(`⚠ ${stats.errors.length} file(s) failed to sync. Check console.`, 8000);
-        stats.errors.forEach((e) => console.error("[S3 Git Sync]", e));
+      if (direction === "quick") {
+        this.updateStatusBar(`Synced ${ts}`);
+        const summary = [
+          stats.uploaded && `↑${stats.uploaded}`, stats.downloaded && `↓${stats.downloaded}`,
+          stats.deletedFromS3 && `✕${stats.deletedFromS3}`, stats.deletedFromLocal && `✕${stats.deletedFromLocal}`,
+        ].filter(Boolean).join(" ");
+        new Notice(`Sync complete: ${summary}`, 5000);
+        if (stats.errors.length > 0) {
+          new Notice(`⚠ ${stats.errors.length} file(s) failed to sync. Check console.`, 8000);
+          stats.errors.forEach((e) => console.error("[S3 Git Sync]", e));
+        }
+      } else {
+        this.updateStatusBar(`${direction === "push" ? "Pushed" : "Pulled"} ${ts}`);
+        new Notice(`${label} complete: ${stats.uploaded + stats.downloaded} file(s).`, 4000);
       }
     } catch (err: unknown) {
       notice.hide();
       this.updateStatusBar("Error");
-      this.handleSyncError(err, "Sync failed");
+      this.handleSyncError(err, `${label} failed`);
     } finally {
       this.isSyncing = false;
+      void this.refreshBadge();
     }
   }
 
-  /** Only upload (push) or only download (pull) — skips the other direction */
-  async directedSync(direction: "push" | "pull") {
-    if (this.isSyncing) {
-      new Notice("A sync is already in progress.");
-      return;
-    }
-    this.isSyncing = true;
-    this.updateStatusBar(`${direction === "push" ? "Pushing" : "Pulling"}…`);
-
-    const notice = new Notice(`${direction === "push" ? "Pushing" : "Pulling"}…`, 0);
-
-    try {
-      const { changes } = await computeChanges(
-        this.app.vault,
-        this.s3Client,
-        this.db,
-        this.settings
-      );
-
-      // Filter to only the relevant direction
-      const filtered = changes.filter((c) => {
-        if (direction === "push") {
-          return c.changeType === "local_new" ||
-            c.changeType === "local_modified" ||
-            c.changeType === "local_deleted" ||
-            c.changeType === "conflict";
-        } else {
-          return c.changeType === "remote_new" ||
-            c.changeType === "remote_modified" ||
-            c.changeType === "remote_deleted" ||
-            c.changeType === "conflict";
-        }
-      });
-
-      if (filtered.length === 0) {
-        notice.hide();
-        this.updateStatusBar("Up to date");
-        new Notice("Nothing to " + direction, 3000);
-        return;
+  /** Filter raw changes for the given direction and build SyncOptions. */
+  private filterChanges(
+    direction: "quick" | "push" | "pull",
+    changes: FileChange[],
+    notice: Notice,
+  ): { syncable: FileChange[] | null; opts: SyncOptions } {
+    if (direction === "quick") {
+      const conflictCount = changes.filter((c) => c.changeType === "conflict").length;
+      const syncable = changes.filter((c) => c.changeType !== "conflict");
+      if (conflictCount > 0) {
+        new Notice(`${conflictCount} conflict${conflictCount > 1 ? "s" : ""} need manual resolution — open View Changes to resolve them.`, 8_000);
       }
-
-      const conflictOverride = new Map(
-        filtered
-          .filter((c) => c.changeType === "conflict")
-          .map((c) => [c.key, direction === "push" ? ("local" as const) : ("remote" as const)])
-      );
-
-      const stats = await executeSync(
-        filtered,
-        { conflictResolutions: conflictOverride },
-        this.app.vault,
-        this.s3Client,
-        this.db,
-        (done, total, file) => {
-          notice.setMessage(`${direction === "push" ? "Pushing" : "Pulling"} ${done + 1}/${total}: ${file}`);
-        }
-      );
-
-      notice.hide();
-      const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      this.updateStatusBar(`${direction === "push" ? "Pushed" : "Pulled"} ${ts}`);
-      new Notice(
-        `${direction === "push" ? "Push" : "Pull"} complete: ${stats.uploaded + stats.downloaded} file(s).`,
-        4000
-      );
-    } catch (err: unknown) {
-      notice.hide();
-      this.updateStatusBar("Error");
-      this.handleSyncError(err, `${direction} failed`);
-    } finally {
-      this.isSyncing = false;
+      if (syncable.length === 0) {
+        notice.hide(); this.updateStatusBar("Up to date"); new Notice("Everything is up to date.", 3000);
+        return { syncable: null, opts: {} };
+      }
+      return { syncable, opts: {} };
     }
+
+    const PUSH_TYPES = new Set(["local_new", "local_modified", "local_deleted", "conflict"]);
+    const PULL_TYPES = new Set(["remote_new", "remote_modified", "remote_deleted", "conflict"]);
+    const types = direction === "push" ? PUSH_TYPES : PULL_TYPES;
+    const syncable = changes.filter((c) => types.has(c.changeType));
+    if (syncable.length === 0) {
+      notice.hide(); this.updateStatusBar("Up to date"); new Notice(`Nothing to ${direction}`, 3000);
+      return { syncable: null, opts: {} };
+    }
+    const conflictResolutions = new Map(
+      syncable.filter((c) => c.changeType === "conflict")
+        .map((c) => [c.key, direction === "push" ? ("local" as const) : ("remote" as const)])
+    );
+    return { syncable, opts: { conflictResolutions } };
   }
 }

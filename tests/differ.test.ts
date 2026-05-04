@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { computeChanges, groupChanges, hasChanges } from "../src/differ";
+import { computeChanges, groupChanges, hasChanges } from "../src/sync/differ";
 import { DEFAULT_SETTINGS } from "../src/types";
 import type { RemoteObject, SyncRecord } from "../src/types";
 

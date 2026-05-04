@@ -1,7 +1,8 @@
 import { App, Notice, Platform, PluginSettingTab, Setting } from "obsidian";
-import { SSOSessionExpiredError, validateAccessKeyId } from "./s3client";
-import type S3GitSyncPlugin from "./main";
-import type { AuthMethod } from "./types";
+import { validateAccessKeyId } from "../s3/client";
+import { SSOSessionExpiredError, ssoRelogCommand } from "../s3/errors";
+import type S3GitSyncPlugin from "../main";
+import type { AuthMethod } from "../types";
 
 export class S3GitSyncSettingTab extends PluginSettingTab {
   plugin: S3GitSyncPlugin;
@@ -29,10 +30,12 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Authentication method")
+      // eslint-disable-next-line obsidianmd/ui/sentence-case
       .setDesc("How this plugin authenticates to AWS S3.")
       .addDropdown((d) => {
         d.addOption("static", "Access key & secret (stored in plugin)");
         if (Platform.isDesktop) {
+          // eslint-disable-next-line obsidianmd/ui/sentence-case
           d.addOption("profile", "AWS named profile (~/.aws/credentials)");
         }
         d.setValue(this.plugin.settings.s3.authMethod)
@@ -60,6 +63,7 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
       .setDesc("The S3 bucket to sync with.")
       .addText((t) =>
         t
+          // eslint-disable-next-line obsidianmd/ui/sentence-case
           .setPlaceholder("my-obsidian-vault")
           .setValue(this.plugin.settings.s3.s3BucketName)
           .onChange(async (v) => {
@@ -70,9 +74,11 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Region")
+      // eslint-disable-next-line obsidianmd/ui/sentence-case
       .setDesc("AWS region where the bucket lives, for example: ap-southeast-1")
       .addText((t) =>
         t
+          // eslint-disable-next-line obsidianmd/ui/sentence-case
           .setPlaceholder("us-east-1")
           .setValue(this.plugin.settings.s3.s3Region)
           .onChange(async (v) => {
@@ -118,6 +124,7 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
       )
       .addText((t) =>
         t
+          // eslint-disable-next-line obsidianmd/ui/sentence-case
           .setPlaceholder("my-vault/")
           .setValue(this.plugin.settings.s3.s3Prefix)
           .onChange(async (v) => {
@@ -127,7 +134,9 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      // eslint-disable-next-line obsidianmd/ui/sentence-case
       .setName("Force path-style URLs")
+      // eslint-disable-next-line obsidianmd/ui/sentence-case
       .setDesc("Enable for MinIO and other self-hosted S3 implementations that require path-style URLs, for example: https://host/bucket/key.")
       .addToggle((t) =>
         t.setValue(this.plugin.settings.s3.forcePathStyle).onChange(async (v) => {
@@ -149,7 +158,7 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
             if (err instanceof SSOSessionExpiredError) {
               const profile = this.plugin.settings.s3.s3ProfileName || "default";
               new Notice(
-                `❌ AWS SSO session expired.\n\nRun in a terminal:\n  aws sso login --profile ${profile}\n\nThen try again.`,
+                `❌ AWS SSO session expired.\n\nRun in a terminal:\n  ${ssoRelogCommand(profile)}\n\nThen try again.`,
                 15_000
               );
             } else {
@@ -166,7 +175,8 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("Ignore patterns").setHeading();
     containerEl.createEl("p", {
       cls: "setting-item-description",
-      text: "Vault-relative paths to exclude from sync. One entry per line. Supports * and ? wildcards.",
+      // eslint-disable-next-line obsidianmd/ui/sentence-case
+      text: "Vault-relative paths to exclude from sync. One entry per line. Supports * and ? glob wildcards.",
     });
 
     const configDir = this.app.vault.configDir;
@@ -196,11 +206,66 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
         t.setValue(this.plugin.settings.showStatusBar).onChange(async (v) => {
           this.plugin.settings.showStatusBar = v;
           await this.plugin.saveSettings();
+          this.plugin.setStatusBarVisible(v);
         })
       );
 
     // ── Danger zone ───────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Advanced").setHeading();
+
+    new Setting(containerEl)
+      .setName("Ribbon badge — poll interval")
+      .setDesc(
+        "How often to check S3 for remote changes and show a count badge on the ribbon icon. " +
+          "Set to 0 to disable. Each poll is one S3 ListObjects call (~$0.01/month at 5-minute intervals)."
+      )
+      .addSlider((s) =>
+        s
+          .setLimits(0, 60, 5)
+          .setValue(this.plugin.settings.badgePollIntervalMin)
+          .setDynamicTooltip()
+          .onChange(async (v) => {
+            this.plugin.settings.badgePollIntervalMin = v;
+            await this.plugin.saveSettings();
+            this.plugin.restartBadgePoll();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Export S3 backup")
+      .setDesc(
+        "Download all files currently in the S3 bucket as a single ZIP archive. " +
+          "Useful as a point-in-time backup before a bulk operation."
+      )
+      .addButton((btn) =>
+        btn.setButtonText("Export backup").onClick(() => {
+          this.plugin.exportBackup();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Export settings")
+      .setDesc(
+        "Download a JSON file with all settings except credentials. " +
+          "Use this to bootstrap the plugin on another device."
+      )
+      .addButton((btn) =>
+        btn.setButtonText("Export").onClick(() => {
+          this.plugin.exportSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Import settings")
+      .setDesc(
+        "Load settings from a previously exported JSON file. " +
+          "Your credentials on this device will not be overwritten."
+      )
+      .addButton((btn) =>
+        btn.setButtonText("Import").onClick(() => {
+          this.plugin.importSettings();
+        })
+      );
 
     new Setting(containerEl)
       .setName("Reset sync state")
@@ -245,6 +310,7 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
 
     new Setting(container)
       .setName("Access key ID")
+      // eslint-disable-next-line obsidianmd/ui/sentence-case
       .setDesc("Starts with AKIA (long-term) or ASIA (temporary session).")
       .addText((t) => {
         t.setPlaceholder("AKIAIOSFODNN7EXAMPLE")
@@ -264,6 +330,7 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
     new Setting(container)
       .setName("Secret access key")
       .addText((t) => {
+        // eslint-disable-next-line obsidianmd/ui/sentence-case
         t.setPlaceholder("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
           .setValue(this.plugin.settings.s3.s3SecretAccessKey)
           .onChange(async (v) => {
@@ -302,6 +369,7 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
       )
       .addText((t) =>
         t
+          // eslint-disable-next-line obsidianmd/ui/sentence-case
           .setPlaceholder("default")
           .setValue(this.plugin.settings.s3.s3ProfileName)
           .onChange(async (v) => {
