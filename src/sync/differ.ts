@@ -150,7 +150,7 @@ export async function computeChanges(
       // Both exist — check if either side changed
       // 1s tolerance on mtime to avoid false positives from filesystem resolution differences
       let localChanged = local.stat.mtime > synced.localMtime + 1000;
-      const remoteChanged = remote.etag !== synced.etag;
+      let remoteChanged = remote.etag !== synced.etag;
 
       // mtime can change without the content changing (e.g. user opened the
       // file, Obsidian re-saved on close, or a file-system tool touched it).
@@ -169,6 +169,24 @@ export async function computeChanges(
         if (md5 && md5 === synced.etag.replace(/"/g, "")) {
           await db.upsertSyncRecord({ ...synced, localMtime: local.stat.mtime });
           localChanged = false;
+        }
+      }
+
+      // The remote ETag can change without the content changing — e.g. a file
+      // re-PUT with the same bytes, a metadata-only update, or SSE key rotation.
+      // If the new remote ETag is a plain MD5 and local content hashes to the
+      // same value, the two sides are already in sync; just update the record.
+      if (
+        remoteChanged &&
+        !localChanged &&
+        remote.size === local.stat.size &&
+        !isMultipartEtag(remote.etag)
+      ) {
+        const data = await vault.adapter.readBinary(local.path);
+        const md5 = await computeMd5Hex(data);
+        if (md5 && md5 === remote.etag) {
+          await db.upsertSyncRecord({ ...synced, etag: remote.etag, localMtime: local.stat.mtime });
+          remoteChanged = false;
         }
       }
 

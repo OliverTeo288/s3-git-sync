@@ -8,6 +8,7 @@ import type {
   SyncRecord,
   SyncStats,
 } from "../types";
+import { isTextFile, mergeWithConflictMarkers } from "./diffEngine";
 import { assertSafeVaultKey, extractErrorMessage } from "../utils";
 
 export type ProgressCallback = (
@@ -21,7 +22,7 @@ export interface SyncOptions {
   /** Which file keys to include; undefined = include all */
   selectedKeys?: Set<string>;
   /** Override per-conflict resolution from settings */
-  conflictResolutions?: Map<string, "local" | "remote">;
+  conflictResolutions?: Map<string, "local" | "remote" | "both">;
   /** Optional commit message stored in S3 metadata */
   message?: string;
 }
@@ -53,7 +54,7 @@ function shouldInclude(key: string, opts: SyncOptions): boolean {
   return !opts.selectedKeys || opts.selectedKeys.has(key);
 }
 
-function resolveConflict(key: string, opts: SyncOptions): "local" | "remote" {
+function resolveConflict(key: string, opts: SyncOptions): "local" | "remote" | "both" {
   // The modal flow populates conflictResolutions; quick-sync pre-filters
   // conflicts out. If we ever land here without a resolution it means a
   // race or a caller bug — refuse rather than silently overwriting either side.
@@ -61,6 +62,7 @@ function resolveConflict(key: string, opts: SyncOptions): "local" | "remote" {
   if (!res) throw new Error(`No conflict resolution provided for ${key}`);
   return res;
 }
+
 
 function emptyStats(): SyncStats {
   return {
@@ -210,18 +212,44 @@ export async function executeSync(
 
         case "conflict": {
           stats.conflicts++;
-          if (resolveConflict(change.key, opts) === "local") {
+          const resolution = resolveConflict(change.key, opts);
+
+          if (resolution === "local") {
             progress(change.key, "uploading (conflict → local wins)");
             const etag = await uploadLocalToS3(change, vault, s3);
             newRecords.push(buildSyncRecord(vault, change, etag, 0));
             stats.uploaded++;
-          } else {
+
+          } else if (resolution === "remote") {
             progress(change.key, "downloading (conflict → remote wins)");
             await backupLocalIfExists(vault, change.key);
             const data = await downloadS3ToLocal(change, vault, s3);
             newRecords.push(buildSyncRecord(vault, change, change.remoteEtag ?? "", data.byteLength));
             stats.downloaded++;
+
+          } else {
+            // "both" — for text files, append the remote content below the local
+            // content using git-style conflict markers so the user can resolve
+            // in-place in Obsidian. The merged file is then uploaded to S3.
+            // For binary files there is no meaningful way to merge inline, so
+            // local wins silently (same as "local" resolution).
+            progress(change.key, "merging conflict (keep both)");
+            if (isTextFile(change.key)) {
+              const [localData, remoteData] = await Promise.all([
+                vault.adapter.readBinary(change.key),
+                s3.getObject(change.s3Key),
+              ]);
+              const decode = (b: ArrayBuffer) => new TextDecoder("utf-8", { fatal: false }).decode(b);
+              const ts = new Date().toLocaleString();
+              const merged = mergeWithConflictMarkers(decode(localData), decode(remoteData), ts);
+              await vault.adapter.writeBinary(change.key, new TextEncoder().encode(merged).buffer);
+            }
+            // Upload (merged or unchanged) local file so S3 reflects the resolved state.
+            const etag = await uploadLocalToS3(change, vault, s3);
+            newRecords.push(buildSyncRecord(vault, change, etag, 0));
+            stats.uploaded++;
           }
+
           fileLog.push({ key: change.key, action: "conflict" });
           break;
         }

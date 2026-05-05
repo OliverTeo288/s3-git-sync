@@ -29,7 +29,7 @@ export class ChangeViewModal extends Modal {
   private readonly setSyncing?: (busy: boolean) => void;
 
   private checkedKeys = new Set<string>();
-  private conflictResolutions = new Map<string, "local" | "remote">();
+  private conflictResolutions = new Map<string, "local" | "remote" | "both">();
   private messageInput: HTMLInputElement | null = null;
   private syncBtn: HTMLButtonElement | null = null;
   private progressEl: HTMLElement | null = null;
@@ -165,11 +165,40 @@ export class ChangeViewModal extends Modal {
 
   private renderConflictSection(parent: HTMLElement, conflicts: FileChange[]) {
     const section = parent.createDiv("s3sync-section s3sync-section-conflict");
-    section.createEl("h4", { text: "⚠️ conflicts — both sides changed" });
-    section.createEl("p", {
-      cls: "s3sync-conflict-hint",
-      text: "Both sides changed since last sync. Choose which version to keep for each file.",
-    });
+
+    // ── Section header with bulk resolution buttons ───────────────────────────
+    const sectionHeader = section.createDiv("s3sync-conflict-section-header");
+    sectionHeader.createEl("h4", { text: `⚠️ conflicts — both sides changed (${conflicts.length})` });
+
+    const bulk = sectionHeader.createDiv("s3sync-conflict-bulk");
+    const bulkLocalBtn  = bulk.createEl("button", { cls: "s3sync-conflict-bulk-btn", text: "⬆ Keep local for all" });
+    const bulkRemoteBtn = bulk.createEl("button", { cls: "s3sync-conflict-bulk-btn", text: "⬇ Keep remote for all" });
+    // eslint-disable-next-line obsidianmd/ui/sentence-case
+    const bulkBothBtn   = bulk.createEl("button", { cls: "s3sync-conflict-bulk-btn", text: "⎇ Keep both for all" });
+
+    // On first install every existing file shows as a conflict because there are
+    // no sync records yet. Detect this and surface a clearer explanation.
+    const isFirstSync = conflicts.every((c) => !c.localMtime || !c.remoteMtime
+      ? false
+      : Math.abs((c.localMtime ?? 0) - (c.remoteMtime instanceof Date
+          ? c.remoteMtime.getTime()
+          : (c.remoteMtime ?? 0))) > 0);
+    if (conflicts.length > 5 && isFirstSync) {
+      section.createEl("p", {
+        cls: "s3sync-conflict-hint s3sync-conflict-hint-firstsync",
+        text: "Looks like a first sync — files exist on both sides with no prior sync history. " +
+              "Use \"Keep remote for all\" to trust S3 as the source of truth, or \"Keep local for all\" to keep your local version.",
+      });
+    } else {
+      section.createEl("p", {
+        cls: "s3sync-conflict-hint",
+        text: "Both sides changed since last sync. Choose which version to keep for each file.",
+      });
+    }
+
+    // ── Per-file rows ─────────────────────────────────────────────────────────
+    // Track all button triples so bulk actions can update them without DOM queries.
+    const rowBtns = new Map<string, { local: HTMLButtonElement; remote: HTMLButtonElement; both: HTMLButtonElement }>();
 
     for (const change of conflicts) {
       const row = section.createDiv("s3sync-conflict-row");
@@ -192,13 +221,45 @@ export class ChangeViewModal extends Modal {
 
       const controls = row.createDiv("s3sync-conflict-controls");
       const defaultRes = this.conflictResolutions.get(change.key) ?? "local";
-      const localBtn = controls.createEl("button", { cls: `s3sync-conflict-btn ${defaultRes === "local" ? "active" : ""}`, text: "Keep local" });
-      const remoteBtn = controls.createEl("button", { cls: `s3sync-conflict-btn ${defaultRes === "remote" ? "active" : ""}`, text: "Keep remote" });
-      localBtn.onclick = () => { this.conflictResolutions.set(change.key, "local"); localBtn.addClass("active"); remoteBtn.removeClass("active"); };
-      remoteBtn.onclick = () => { this.conflictResolutions.set(change.key, "remote"); remoteBtn.addClass("active"); localBtn.removeClass("active"); };
+      const localBtn  = controls.createEl("button", { cls: `s3sync-conflict-btn ${defaultRes === "local"   ? "active" : ""}`, text: "Keep local" });
+      const remoteBtn = controls.createEl("button", { cls: `s3sync-conflict-btn ${defaultRes === "remote"  ? "active" : ""}`, text: "Keep remote" });
+      const bothBtn   = controls.createEl("button", {
+        cls: `s3sync-conflict-btn s3sync-conflict-btn-both ${defaultRes === "both" ? "active" : ""}`,
+        text: "Keep both",
+      });
+      // eslint-disable-next-line obsidianmd/ui/sentence-case
+      bothBtn.title = "Appends the remote content to your local file with conflict markers (<<<<<<< / >>>>>>>) so you can merge in place. Binary files keep local silently.";
 
+      const setRes = (res: "local" | "remote" | "both") => {
+        this.conflictResolutions.set(change.key, res);
+        localBtn [res === "local"   ? "addClass" : "removeClass"]("active");
+        remoteBtn[res === "remote"  ? "addClass" : "removeClass"]("active");
+        bothBtn  [res === "both"    ? "addClass" : "removeClass"]("active");
+      };
+
+      localBtn.onclick  = () => setRes("local");
+      remoteBtn.onclick = () => setRes("remote");
+      bothBtn.onclick   = () => setRes("both");
+
+      rowBtns.set(change.key, { local: localBtn, remote: remoteBtn, both: bothBtn });
       this.attachDiffToggle(section, controls, change);
     }
+
+    // ── Bulk button handlers ──────────────────────────────────────────────────
+    const applyBulk = (resolution: "local" | "remote" | "both") => {
+      for (const change of conflicts) {
+        const btns = rowBtns.get(change.key);
+        if (!btns) continue;
+        this.conflictResolutions.set(change.key, resolution);
+        btns.local [resolution === "local"   ? "addClass" : "removeClass"]("active");
+        btns.remote[resolution === "remote"  ? "addClass" : "removeClass"]("active");
+        btns.both  [resolution === "both"    ? "addClass" : "removeClass"]("active");
+      }
+    };
+
+    bulkLocalBtn.onclick  = () => applyBulk("local");
+    bulkRemoteBtn.onclick = () => applyBulk("remote");
+    bulkBothBtn.onclick   = () => applyBulk("both");
   }
 
   /** Render a standard file row (checkbox, badges, path, meta). Returns the row element. */

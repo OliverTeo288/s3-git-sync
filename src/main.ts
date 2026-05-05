@@ -58,7 +58,12 @@ export default class S3GitSyncPlugin extends Plugin {
       callback: () => this.exportBackup(),
     });
 
-    if (this.settings.badgePollIntervalMin > 0) this.startBadgePoll();
+    // Defer the first badge poll until Obsidian has finished indexing the vault.
+    // Starting it directly in onload means vault.getFiles() can return a partial
+    // list, making every S3 object appear as "remote_new" and inflating the count.
+    this.app.workspace.onLayoutReady(() => {
+      if (this.settings.badgePollIntervalMin > 0) this.startBadgePoll();
+    });
   }
 
   onunload() { this.stopBadgePoll(); }

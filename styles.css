@@ -213,10 +213,51 @@
 }
 
 /* Conflict section */
+.s3sync-conflict-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px 0;
+}
+
+.s3sync-conflict-section-header h4 {
+  margin: 0;
+}
+
+.s3sync-conflict-bulk {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.s3sync-conflict-bulk-btn {
+  font-size: 0.8em;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: var(--background-modifier-border);
+  border: 1px solid var(--background-modifier-border-hover);
+  color: var(--text-normal);
+}
+
+.s3sync-conflict-bulk-btn:hover {
+  background: var(--background-modifier-hover);
+}
+
 .s3sync-conflict-hint {
   margin: 4px 12px 8px;
   font-size: 0.85em;
   color: var(--text-muted);
+}
+
+.s3sync-conflict-hint-firstsync {
+  background: var(--background-modifier-border);
+  border-left: 3px solid var(--color-yellow);
+  border-radius: 4px;
+  padding: 6px 10px;
+  margin: 6px 12px 8px;
 }
 
 .s3sync-conflict-row {
@@ -261,6 +302,12 @@
   color: var(--color-orange);
   background: rgba(var(--color-orange-rgb), 0.15);
   font-weight: 600;
+}
+
+.s3sync-conflict-btn-both.active {
+  border-color: var(--color-blue);
+  color: var(--color-blue);
+  background: rgba(var(--color-blue-rgb), 0.15);
 }
 
 /* Commit message row */
