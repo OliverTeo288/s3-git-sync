@@ -227,7 +227,6 @@ export class ChangeViewModal extends Modal {
         cls: `s3sync-conflict-btn s3sync-conflict-btn-both ${defaultRes === "both" ? "active" : ""}`,
         text: "Keep both",
       });
-      // eslint-disable-next-line obsidianmd/ui/sentence-case
       bothBtn.title = "Appends the remote content to your local file with conflict markers (<<<<<<< / >>>>>>>) so you can merge in place. Binary files keep local silently.";
 
       const setRes = (res: "local" | "remote" | "both") => {

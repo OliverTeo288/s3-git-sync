@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Type-check · Test · Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: "25"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm install
+
+      # Emits inline ::error:: / ::warning:: annotations on the PR diff
+      # by piping ESLint's JSON output through a small Node script.
+      # Fails the job on any error (sentence-case false positives are
+      # downgraded to warnings — see eslint.config.mjs for rationale).
+      - name: ESLint (Obsidian community-plugin rules)
+        run: |
+          set -o pipefail
+          npx eslint src/ --format=json --output-file=eslint.json || true
+          node -e "
+            const r = JSON.parse(require('fs').readFileSync('eslint.json','utf8'));
+            let errors = 0, warnings = 0;
+            for (const f of r) for (const m of f.messages) {
+              const sev = m.severity === 2 ? 'error' : 'warning';
+              if (m.severity === 2) errors++; else warnings++;
+              const file = require('path').relative(process.cwd(), f.filePath);
+              process.stdout.write(\`::\${sev} file=\${file},line=\${m.line},col=\${m.column}::[\${m.ruleId}] \${m.message}\n\`);
+            }
+            console.log(\`\nESLint: \${errors} error(s), \${warnings} warning(s)\`);
+            process.exit(errors > 0 ? 1 : 0);
+          "
+
+      - name: ESLint summary
+        if: always()
+        run: |
+          {
+            echo "### ESLint report"
+            echo ""
+            echo '```'
+            npx eslint src/ --format=stylish 2>&1 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: TypeScript type-check
+        run: npx tsc --noEmit --skipLibCheck
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: ignore
+
+      - name: Build plugin
+        run: node esbuild.config.mjs production
+
+      - name: Verify required artefacts exist
+        run: |
+          for f in main.js manifest.json styles.css; do
+            [ -f "$f" ] || { echo "Missing: $f"; exit 1; }
+          done
+          echo "All required artefacts present."

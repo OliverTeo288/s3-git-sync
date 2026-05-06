@@ -76,6 +76,41 @@ import { SSOSessionExpiredError, ssoRelogCommand } from "../s3/errors";
 import { extractErrorMessage } from "../utils";
 
 /**
+ * Append a command row — `<code>` + "Copy" button — to any parent element.
+ * Shared between the inline error banner and the Notice fragment.
+ */
+function appendSSOCommandRow(parent: HTMLElement, profileName: string): void {
+  const cmd = ssoRelogCommand(profileName);
+  const row = parent.createDiv({ cls: "s3sync-sso-cmd-row" });
+  row.createEl("code", { cls: "s3sync-error-cmd", text: cmd });
+
+  const copyBtn = row.createEl("button", { cls: "s3sync-copy-btn", text: "Copy" });
+  copyBtn.onclick = () => {
+    navigator.clipboard.writeText(cmd).then(() => {
+      copyBtn.setText("Copied!");
+      activeWindow.setTimeout(() => copyBtn.setText("Copy"), 2000);
+    }).catch(() => {
+      // Fallback: select the code text so the user can copy manually
+      copyBtn.setText("Copy failed — select text above");
+    });
+  };
+}
+
+/**
+ * Build a DocumentFragment for use in `new Notice(fragment, duration)`.
+ * Shows the re-auth command with a Copy button inline in the notification.
+ */
+export function buildSSOExpiredFragment(profileName: string): DocumentFragment {
+  return createFragment((frag) => {
+    const wrap = frag.createDiv({ cls: "s3sync-sso-notice" });
+    // eslint-disable-next-line obsidianmd/ui/sentence-case
+    wrap.createEl("strong", { text: "AWS SSO session expired" });
+    wrap.createEl("p", { text: "Run this in a terminal, then retry:" });
+    appendSSOCommandRow(wrap, profileName);
+  });
+}
+
+/**
  * Render an error banner inside a modal content element.
  * Shows specialised guidance for SSO expiry; falls back to a plain message.
  */
@@ -89,7 +124,7 @@ export function renderErrorBanner(
     // eslint-disable-next-line obsidianmd/ui/sentence-case
     banner.createEl("strong", { text: "AWS SSO session expired" });
     banner.createEl("p", { text: "Run this in a terminal, then click retry:" });
-    banner.createEl("code", { cls: "s3sync-error-cmd", text: ssoRelogCommand(err.profileName) });
+    appendSSOCommandRow(banner, err.profileName);
   } else {
     banner.setText(`${fallbackPrefix}: ${extractErrorMessage(err)}`);
   }

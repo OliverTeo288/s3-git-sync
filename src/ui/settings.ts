@@ -1,6 +1,7 @@
 import { App, Notice, Platform, PluginSettingTab, Setting } from "obsidian";
 import { validateAccessKeyId } from "../s3/client";
-import { SSOSessionExpiredError, ssoRelogCommand } from "../s3/errors";
+import { SSOSessionExpiredError } from "../s3/errors";
+import { buildSSOExpiredFragment } from "./uiHelpers";
 import type S3GitSyncPlugin from "../main";
 import type { AuthMethod } from "../types";
 
@@ -156,11 +157,7 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
             new Notice("✅ Connection successful!");
           } catch (err: unknown) {
             if (err instanceof SSOSessionExpiredError) {
-              const profile = this.plugin.settings.s3.s3ProfileName || "default";
-              new Notice(
-                `❌ AWS SSO session expired.\n\nRun in a terminal:\n  ${ssoRelogCommand(profile)}\n\nThen try again.`,
-                15_000
-              );
+              new Notice(buildSSOExpiredFragment(err.profileName), 15_000);
             } else {
               const msg = err instanceof Error ? err.message : String(err);
               new Notice(`❌ ${msg}`, 10_000);

@@ -3,11 +3,12 @@ import { BackupModal, ChangeViewModal, FileVersionModal, HistoryModal } from "./
 import { computeChanges } from "./sync/differ";
 import { LocalDB } from "./sync/localdb";
 import { S3ClientWrapper } from "./s3/client";
-import { SSOSessionExpiredError, ssoRelogCommand } from "./s3/errors";
+import { SSOSessionExpiredError } from "./s3/errors";
 import { S3GitSyncSettingTab } from "./ui/settings";
 import { executeSync, type SyncOptions } from "./sync/engine";
 import { DEFAULT_SETTINGS, type FileChange, type S3GitSyncSettings } from "./types";
 import { extractErrorMessage, openExternalUrl, triggerBlobDownload } from "./utils";
+import { buildSSOExpiredFragment } from "./ui/uiHelpers";
 
 export default class S3GitSyncPlugin extends Plugin {
   settings!: S3GitSyncSettings;
@@ -200,10 +201,7 @@ export default class S3GitSyncPlugin extends Plugin {
 
   handleSyncError(err: unknown, prefix: string): void {
     if (err instanceof SSOSessionExpiredError) {
-      new Notice(
-        `AWS SSO session expired.\n\nRun in a terminal:\n  ${ssoRelogCommand(err.profileName)}\n\nThen retry the sync.`,
-        15_000
-      );
+      new Notice(buildSSOExpiredFragment(err.profileName), 15_000);
       return;
     }
     new Notice(`${prefix}: ${extractErrorMessage(err)}`, 8_000);
