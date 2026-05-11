@@ -1,7 +1,7 @@
 import { Platform, type Vault } from "obsidian";
 import type { LocalDB } from "./localdb";
 import type { S3ClientWrapper } from "../s3/client";
-import type { FileChange, RemoteObject, S3GitSyncSettings } from "../types";
+import type { FileChange, S3GitSyncSettings } from "../types";
 
 // ─── Pattern Matching ─────────────────────────────────────────────────────────
 
@@ -93,12 +93,13 @@ export async function computeChanges(
   const localFiles = vault.getFiles().filter((f) => !isIgnored(f.path, ignorePatterns));
   const localMap = new Map(localFiles.map((f) => [f.path, f]));
 
-  const remoteObjects: RemoteObject[] = await s3.listObjects();
+  const [remoteObjects, syncedMap] = await Promise.all([
+    s3.listObjects(),
+    db.getAllSyncRecords(),
+  ]);
   const remoteMap = new Map(
     remoteObjects.filter((o) => !isIgnored(o.vaultKey, ignorePatterns)).map((o) => [o.vaultKey, o])
   );
-
-  const syncedMap = await db.getAllSyncRecords();
 
   const allKeys = new Set<string>([
     ...localMap.keys(),
@@ -166,7 +167,7 @@ export async function computeChanges(
       ) {
         const data = await vault.adapter.readBinary(local.path);
         const md5 = await computeMd5Hex(data);
-        if (md5 && md5 === synced.etag.replace(/"/g, "")) {
+        if (md5 && md5 === synced.etag) {
           await db.upsertSyncRecord({ ...synced, localMtime: local.stat.mtime });
           localChanged = false;
         }

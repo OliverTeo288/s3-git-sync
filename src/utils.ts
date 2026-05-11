@@ -9,6 +9,16 @@ export function extractErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Decode an ArrayBuffer as UTF-8, replacing malformed sequences rather than throwing. */
+export function decodeUtf8(buf: ArrayBuffer): string {
+  return new TextDecoder("utf-8", { fatal: false }).decode(buf);
+}
+
+/** Return the filename component of a vault path, e.g. "Notes/foo.md" → "foo.md". */
+export function basename(path: string): string {
+  return path.split("/").pop() ?? path;
+}
+
 /**
  * Reject vault paths that could escape the vault root or interact with
  * platform-specific reserved syntax. S3 keys are attacker-controllable in

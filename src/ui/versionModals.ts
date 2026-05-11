@@ -5,7 +5,7 @@ import { ensureParentFolder } from "../sync/engine";
 import type { ObjectVersion } from "../types";
 import { formatSize, renderErrorBanner } from "./uiHelpers";
 import { isTextFile } from "../sync/diffEngine";
-import { extractErrorMessage } from "../utils";
+import { basename, decodeUtf8, extractErrorMessage } from "../utils";
 
 // ─── File Version History Modal ───────────────────────────────────────────────
 
@@ -20,7 +20,7 @@ export class FileVersionModal extends Modal {
 
   async onOpen() {
     const { contentEl } = this;
-    const filename = this.vaultKey.split("/").pop() ?? this.vaultKey;
+    const filename = basename(this.vaultKey);
     this.renderHeader(contentEl, filename);
     contentEl.createDiv({ cls: "s3sync-loading", text: "Loading versions…" });
 
@@ -78,7 +78,7 @@ export class FileVersionModal extends Modal {
       btn.setText("Loading…");
       try {
         const data = await this.s3.getObjectVersion(this.s3Key, v.versionId);
-        const text = new TextDecoder("utf-8", { fatal: false }).decode(data);
+        const text = decodeUtf8(data);
         new VersionPreviewModal(this.app, this.vaultKey, v, text).open();
       } catch (err: unknown) {
         new Notice(`Failed to load version: ${extractErrorMessage(err)}`, 5000);
@@ -98,7 +98,7 @@ export class FileVersionModal extends Modal {
         const data = await this.s3.getObjectVersion(this.s3Key, v.versionId);
         await ensureParentFolder(this.vault, this.vaultKey);
         await this.vault.adapter.writeBinary(this.vaultKey, data);
-        const name = this.vaultKey.split("/").pop() ?? this.vaultKey;
+        const name = basename(this.vaultKey);
         new Notice(`Restored ${name} to version from ${new Date(v.lastModified).toLocaleString()}`, 5000);
         this.close();
       } catch (err: unknown) {
@@ -125,7 +125,7 @@ export class VersionPreviewModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.addClass("s3sync-modal");
-    const filename = this.vaultKey.split("/").pop() ?? this.vaultKey;
+    const filename = basename(this.vaultKey);
     contentEl.createEl("h3", { text: filename });
     contentEl.createEl("p", {
       cls: "s3sync-version-preview-meta",

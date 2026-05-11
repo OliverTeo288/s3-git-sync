@@ -9,7 +9,7 @@ import type {
   SyncStats,
 } from "../types";
 import { isTextFile, mergeWithConflictMarkers } from "./diffEngine";
-import { assertSafeVaultKey, extractErrorMessage } from "../utils";
+import { assertSafeVaultKey, decodeUtf8, extractErrorMessage } from "../utils";
 
 export type ProgressCallback = (
   done: number,
@@ -239,9 +239,8 @@ export async function executeSync(
                 vault.adapter.readBinary(change.key),
                 s3.getObject(change.s3Key),
               ]);
-              const decode = (b: ArrayBuffer) => new TextDecoder("utf-8", { fatal: false }).decode(b);
               const ts = new Date().toLocaleString();
-              const merged = mergeWithConflictMarkers(decode(localData), decode(remoteData), ts);
+              const merged = mergeWithConflictMarkers(decodeUtf8(localData), decodeUtf8(remoteData), ts);
               await vault.adapter.writeBinary(change.key, new TextEncoder().encode(merged).buffer);
             }
             // Upload (merged or unchanged) local file so S3 reflects the resolved state.

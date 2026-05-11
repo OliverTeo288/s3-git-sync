@@ -43,17 +43,19 @@ function computeEdits(aLines: string[], bLines: string[]): RawEdit[] | null {
     }
   }
 
+  // Build in reverse order with push() — O(1) per append vs O(n) for unshift.
   const edits: RawEdit[] = [];
   let i = m, j = n;
   while (i > 0 || j > 0) {
     if (i > 0 && j > 0 && aLines[i - 1] === bLines[j - 1]) {
-      edits.unshift({ op: "=", text: aLines[i - 1] }); i--; j--;
+      edits.push({ op: "=", text: aLines[i - 1] }); i--; j--;
     } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      edits.unshift({ op: "+", text: bLines[j - 1] }); j--;
+      edits.push({ op: "+", text: bLines[j - 1] }); j--;
     } else {
-      edits.unshift({ op: "-", text: aLines[i - 1] }); i--;
+      edits.push({ op: "-", text: aLines[i - 1] }); i--;
     }
   }
+  edits.reverse();
 
   // Drop trailing empty "same" line (artefact of split on final newline)
   while (edits.length > 0 && edits[edits.length - 1].op === "=" && edits[edits.length - 1].text === "") {
@@ -126,13 +128,14 @@ export function mergeWithConflictMarkers(localText: string, remoteText: string, 
 
   const edits = computeEdits(localLines, remoteLines);
 
-  // LCS too expensive for large files — fall back to full-append using callouts
+  // LCS too expensive for large files — wrap both sides in callout blocks.
   if (!edits) {
+    const indent = (lines: string[]) => lines.map((l) => (l === "" ? ">" : `> ${l}`)).join("\n");
     return (
-      `${localText}\n\n` +
-      `> [!warning] Conflict — local version\n\n` +
+      `> [!warning] Conflict — local version\n` +
+      indent(localLines) + "\n\n" +
       `> [!danger] Conflict — remote version (${label})\n` +
-      remoteLines.map((l) => (l === "" ? ">" : `> ${l}`)).join("\n") + "\n"
+      indent(remoteLines) + "\n"
     );
   }
 

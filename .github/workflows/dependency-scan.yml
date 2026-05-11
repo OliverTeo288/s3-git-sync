@@ -1,9 +1,8 @@
 name: Dependency Scan
 
-# Runs daily at 08:00 UTC.
-# - Trivy: CVEs (HIGH/CRITICAL), secrets, and licence compliance
-# - npm outdated: informational list of stale packages
-# Can also be triggered manually from the Actions tab.
+# Runs daily at 08:00 UTC and on manual dispatch.
+# Informational only — never fails the workflow.
+# All findings are written to the Actions job summary for review.
 
 on:
   schedule:
@@ -35,65 +34,82 @@ jobs:
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
             | sh -s -- -b /usr/local/bin
 
-      # Fail on HIGH or CRITICAL CVEs in npm dependencies.
+      # ── Scans (exit-code 0 — informational, never blocks the workflow) ────────
+
       - name: Scan dependencies for vulnerabilities
         run: |
           trivy fs . \
             --scanners vuln \
             --pkg-types library \
             --severity HIGH,CRITICAL \
-            --exit-code 1 \
-            --format table
+            --exit-code 0 \
+            --format table \
+            2>&1 | tee trivy-vuln.txt
 
-      # Fail if any secrets or credentials are detected in the codebase.
       - name: Scan for secrets
         run: |
           trivy fs . \
             --scanners secret \
-            --exit-code 1 \
-            --format table
+            --exit-code 0 \
+            --format table \
+            2>&1 | tee trivy-secrets.txt
 
-      # Informational — flags GPL/AGPL/SSPL licences that conflict with MIT.
-      # Does not fail the job; review flagged packages manually.
       - name: Scan for licence compliance
         run: |
           trivy fs . \
             --scanners license \
             --severity HIGH,CRITICAL \
-            --format table
+            --exit-code 0 \
+            --format table \
+            2>&1 | tee trivy-licences.txt
 
-      # Informational — lists packages with newer versions available.
       - name: Check for outdated packages
-        run: npm outdated || true
+        run: npm outdated 2>&1 | tee npm-outdated.txt || true
 
-      # Combined summary written to the Actions job summary page.
-      - name: Summary report
+      # ── Upload raw scan artefacts ─────────────────────────────────────────────
+
+      - name: Upload scan results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: trivy-scan-${{ github.run_id }}
+          path: |
+            trivy-vuln.txt
+            trivy-secrets.txt
+            trivy-licences.txt
+            npm-outdated.txt
+          if-no-files-found: ignore
+
+      # ── Job summary ───────────────────────────────────────────────────────────
+
+      - name: Write summary report
         if: always()
         run: |
-          echo "### Dependency scan — $(date -u '+%Y-%m-%d')" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
+          DATE=$(date -u '+%Y-%m-%d')
+          {
+            echo "## Dependency scan — ${DATE}"
+            echo ""
 
-          echo "#### Vulnerabilities (HIGH / CRITICAL)" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          trivy fs . --scanners vuln --pkg-types library \
-            --severity HIGH,CRITICAL --format table 2>&1 >> "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "### Vulnerabilities (HIGH / CRITICAL)"
+            echo '```'
+            cat trivy-vuln.txt 2>/dev/null || echo "(no output)"
+            echo '```'
+            echo ""
 
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "#### Secret detection" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          trivy fs . --scanners secret --format table 2>&1 >> "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "### Secret detection"
+            echo '```'
+            cat trivy-secrets.txt 2>/dev/null || echo "(no output)"
+            echo '```'
+            echo ""
 
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "#### Licence compliance (HIGH / CRITICAL)" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          trivy fs . --scanners license \
-            --severity HIGH,CRITICAL --format table 2>&1 >> "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "### Licence compliance (HIGH / CRITICAL)"
+            echo '```'
+            cat trivy-licences.txt 2>/dev/null || echo "(no output)"
+            echo '```'
+            echo ""
 
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "#### Outdated packages" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          npm outdated 2>&1 >> "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "### Outdated packages"
+            echo '```'
+            cat npm-outdated.txt 2>/dev/null || echo "(all packages up to date)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

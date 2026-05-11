@@ -10,6 +10,9 @@ import { DEFAULT_SETTINGS, type FileChange, type S3GitSyncSettings } from "./typ
 import { extractErrorMessage, openExternalUrl, triggerBlobDownload } from "./utils";
 import { buildSSOExpiredFragment } from "./ui/uiHelpers";
 
+const PUSH_TYPES = new Set(["local_new", "local_modified", "local_deleted", "conflict"]);
+const PULL_TYPES = new Set(["remote_new", "remote_modified", "remote_deleted", "conflict"]);
+
 export default class S3GitSyncPlugin extends Plugin {
   settings!: S3GitSyncSettings;
   db!: LocalDB;
@@ -298,8 +301,6 @@ export default class S3GitSyncPlugin extends Plugin {
       return { syncable, opts: {} };
     }
 
-    const PUSH_TYPES = new Set(["local_new", "local_modified", "local_deleted", "conflict"]);
-    const PULL_TYPES = new Set(["remote_new", "remote_modified", "remote_deleted", "conflict"]);
     const types = direction === "push" ? PUSH_TYPES : PULL_TYPES;
     const syncable = changes.filter((c) => types.has(c.changeType));
     if (syncable.length === 0) {
