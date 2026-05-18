@@ -1,135 +1,162 @@
-import localforage from "localforage";
+import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import type { SyncHistoryEntry, SyncRecord } from "../types";
 
-type Store = ReturnType<typeof localforage.createInstance>;
+// ─── DB schema ────────────────────────────────────────────────────────────────
 
-// ─── Store Factories ──────────────────────────────────────────────────────────
+interface VaultDBSchema extends DBSchema {
+  "sync-records": { key: string; value: SyncRecord };
+  "sync-history": { key: string; value: SyncHistoryEntry };
+}
 
-const makeRecordsStore = (vaultName: string) =>
-  localforage.createInstance({
-    name: `s-three-sync-${vaultName}`,
-    storeName: "sync-records",
-    description: "Per-file sync state for 3-way diff",
+type VaultDB = IDBPDatabase<VaultDBSchema>;
+
+const DB_VERSION = 1;
+const DB_PREFIX = "s-three-sync";
+const LEGACY_PREFIX = "s3-git-sync";
+const STORE_RECORDS = "sync-records" as const;
+const STORE_HISTORY = "sync-history" as const;
+
+function openVaultDB(vaultName: string): Promise<VaultDB> {
+  return openDB<VaultDBSchema>(`${DB_PREFIX}-${vaultName}`, DB_VERSION, {
+    upgrade(db) {
+      if (!db.objectStoreNames.contains(STORE_RECORDS)) db.createObjectStore(STORE_RECORDS);
+      if (!db.objectStoreNames.contains(STORE_HISTORY)) db.createObjectStore(STORE_HISTORY);
+    },
   });
-
-const makeHistoryStore = (vaultName: string) =>
-  localforage.createInstance({
-    name: `s-three-sync-${vaultName}`,
-    storeName: "sync-history",
-    description: "Sync history log",
-  });
+}
 
 // ─── Legacy migration ─────────────────────────────────────────────────────────
 
 /**
- * One-time migration: copy records from the old `s3-git-sync-*` IndexedDB
- * stores (used before the plugin was renamed to s-three-sync) into the current
- * `s-three-sync-*` stores.  Only runs when the new store is empty — i.e. on
- * the first load after an upgrade.  After copying, the old stores are cleared
- * so the migration never runs again.
+ * Copy all entries from one store in the legacy (untyped) DB into the new
+ * typed VaultDB. No-ops if the source store is empty.
  */
-async function migrateFromLegacyStores(
-  vaultName: string,
-  newRecords: Store,
-  newHistory: Store,
+async function bulkCopyToStore(
+  src: IDBPDatabase,
+  dst: VaultDB,
+  storeName: typeof STORE_RECORDS | typeof STORE_HISTORY,
 ): Promise<void> {
-  const newRecordCount = await newRecords.length();
-  if (newRecordCount > 0) return; // already populated — nothing to do
+  const [keys, values] = await Promise.all([src.getAllKeys(storeName), src.getAll(storeName)]);
+  if (keys.length === 0) return;
+  const tx = dst.transaction(storeName, "readwrite");
+  await Promise.all([...keys.map((k, i) => tx.store.put(values[i], k as string)), tx.done]);
+}
 
-  const legacyRecords = localforage.createInstance({
-    name: `s3-git-sync-${vaultName}`,
-    storeName: "sync-records",
-  });
-  const legacyHistory = localforage.createInstance({
-    name: `s3-git-sync-${vaultName}`,
-    storeName: "sync-history",
-  });
+/**
+ * One-time migration: copy records from the old localforage-based database
+ * (`s3-git-sync-*`) into the current idb database (`s-three-sync-*`).
+ *
+ * Only runs when the new database is empty — i.e. on the first load after a
+ * plugin rename or idb migration. After copying, the old stores are cleared so
+ * this branch is never entered again.
+ */
+async function migrateFromLegacyDB(vaultName: string, newDb: VaultDB): Promise<void> {
+  // Skip if the new DB already has data (migration already ran, or fresh install).
+  const count = await newDb.count(STORE_RECORDS);
+  if (count > 0) return;
 
-  const legacyCount = await legacyRecords.length();
-  if (legacyCount === 0) return; // no legacy data to migrate
+  const legacyName = `${LEGACY_PREFIX}-${vaultName}`;
 
-  // Copy records
-  await legacyRecords.iterate<SyncRecord, void>(async (value, key) => {
-    await newRecords.setItem(key, value);
-  });
+  // Check whether the legacy database actually exists before trying to open it.
+  // indexedDB.databases() is available in all Electron / modern browser versions
+  // Obsidian targets; skip migration silently if unavailable.
+  try {
+    if (typeof indexedDB.databases === "function") {
+      const existing = await indexedDB.databases();
+      if (!existing.some((d) => d.name === legacyName)) return;
+    }
+  } catch {
+    return; // Defensive: if the check itself fails, skip migration
+  }
 
-  // Copy history
-  await legacyHistory.iterate<SyncHistoryEntry, void>(async (value, key) => {
-    await newHistory.setItem(key, value);
-  });
+  // Open the legacy DB. localforage used IDB version 2 for its stores.
+  // We do NOT provide an upgrade callback so we never alter the legacy schema.
+  const legacy = await openDB(legacyName, 2).catch(() => null);
+  if (!legacy) return;
 
-  // Clear legacy stores so this branch is never entered again
-  await Promise.all([legacyRecords.clear(), legacyHistory.clear()]);
+  const storeNames = Array.from(legacy.objectStoreNames);
+  if (!storeNames.includes(STORE_RECORDS)) {
+    legacy.close();
+    return;
+  }
+
+  await bulkCopyToStore(legacy, newDb, STORE_RECORDS);
+  await legacy.clear(STORE_RECORDS);
+
+  if (storeNames.includes(STORE_HISTORY)) {
+    await bulkCopyToStore(legacy, newDb, STORE_HISTORY);
+    await legacy.clear(STORE_HISTORY);
+  }
+
+  legacy.close();
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export class LocalDB {
-  private records: Store;
-  private history: Store;
+  private constructor(private readonly db: VaultDB) {}
 
-  constructor(vaultName: string) {
-    this.records = makeRecordsStore(vaultName);
-    this.history = makeHistoryStore(vaultName);
-  }
-
-  /** Must be awaited once after construction before any reads/writes. */
-  async init(vaultName: string): Promise<void> {
-    await migrateFromLegacyStores(vaultName, this.records, this.history);
+  /**
+   * Open (or create) the vault database and run the one-time legacy migration.
+   * Must be awaited before any reads or writes.
+   */
+  static async create(vaultName: string): Promise<LocalDB> {
+    const db = await openVaultDB(vaultName);
+    await migrateFromLegacyDB(vaultName, db);
+    return new LocalDB(db);
   }
 
   // ── Sync Records ────────────────────────────────────────────────────────────
 
   async getSyncRecord(key: string): Promise<SyncRecord | null> {
-    return this.records.getItem<SyncRecord>(key);
+    return (await this.db.get(STORE_RECORDS, key)) ?? null;
   }
 
   async getAllSyncRecords(): Promise<Map<string, SyncRecord>> {
-    const map = new Map<string, SyncRecord>();
-    await this.records.iterate<SyncRecord, void>((value, key) => {
-      map.set(key, value);
-    });
-    return map;
+    const values = await this.db.getAll(STORE_RECORDS);
+    return new Map(values.map((v) => [v.key, v]));
   }
 
   async upsertSyncRecord(record: SyncRecord): Promise<void> {
-    await this.records.setItem(record.key, record);
+    await this.db.put(STORE_RECORDS, record, record.key);
   }
 
   async deleteSyncRecord(key: string): Promise<void> {
-    await this.records.removeItem(key);
+    await this.db.delete(STORE_RECORDS, key);
   }
 
-  /** Bulk-upsert after a successful sync */
+  /** Bulk-upsert after a successful sync. */
   async bulkUpsertSyncRecords(records: SyncRecord[]): Promise<void> {
-    await Promise.all(records.map((r) => this.records.setItem(r.key, r)));
+    if (records.length === 0) return;
+    const tx = this.db.transaction(STORE_RECORDS, "readwrite");
+    await Promise.all([...records.map((r) => tx.store.put(r, r.key)), tx.done]);
   }
 
   async clearAllSyncRecords(): Promise<void> {
-    await this.records.clear();
+    await this.db.clear(STORE_RECORDS);
   }
 
   // ── Sync History ────────────────────────────────────────────────────────────
 
-  /** Returns entries newest-first */
+  /** Returns entries newest-first. */
   async getHistory(limit = 50): Promise<SyncHistoryEntry[]> {
-    const entries: SyncHistoryEntry[] = [];
-    await this.history.iterate<SyncHistoryEntry, void>((value) => {
-      entries.push(value);
-    });
-    entries.sort((a, b) => b.time - a.time);
-    return entries.slice(0, limit);
+    const all = await this.db.getAll(STORE_HISTORY);
+    return all.sort((a, b) => b.time - a.time).slice(0, limit);
   }
 
   async addHistoryEntry(entry: SyncHistoryEntry): Promise<void> {
-    await this.history.setItem(entry.id, entry);
+    await this.db.put(STORE_HISTORY, entry, entry.id);
     await this.pruneHistory(100);
   }
 
   private async pruneHistory(maxEntries: number): Promise<void> {
-    const entries = await this.getHistory(Number.MAX_SAFE_INTEGER);
-    if (entries.length <= maxEntries) return;
-    const toDelete = entries.slice(maxEntries);
-    await Promise.all(toDelete.map((e) => this.history.removeItem(e.id)));
+    // Count first — avoids a full read on the common path where no pruning is needed.
+    const total = await this.db.count(STORE_HISTORY);
+    if (total <= maxEntries) return;
+    const all = await this.db.getAll(STORE_HISTORY);
+    all.sort((a, b) => b.time - a.time);
+    const toDelete = all.slice(maxEntries);
+    const tx = this.db.transaction(STORE_HISTORY, "readwrite");
+    await Promise.all([...toDelete.map((e) => tx.store.delete(e.id)), tx.done]);
   }
 }

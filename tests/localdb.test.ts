@@ -37,8 +37,8 @@ function makeEntry(id: string, time: number): SyncHistoryEntry {
 describe("LocalDB — sync records", () => {
   let db: LocalDB;
 
-  beforeEach(() => {
-    db = new LocalDB("test-vault");
+  beforeEach(async () => {
+    db = await LocalDB.create("test-vault");
   });
 
   it("returns null for a key that was never stored", async () => {
@@ -99,8 +99,8 @@ describe("LocalDB — sync records", () => {
 describe("LocalDB — sync history", () => {
   let db: LocalDB;
 
-  beforeEach(() => {
-    db = new LocalDB("test-vault");
+  beforeEach(async () => {
+    db = await LocalDB.create("test-vault");
   });
 
   it("returns empty array when no history exists", async () => {

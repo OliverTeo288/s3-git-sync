@@ -28,10 +28,11 @@ export default class S3GitSyncPlugin extends Plugin {
   // ── Lifecycle ────────────────────────────────────────────────────────────────
 
   async onload() {
-    await this.loadSettings();
-
-    this.db = new LocalDB(this.app.vault.getName());
-    await this.db.init(this.app.vault.getName());
+    // loadSettings and DB creation are independent — run concurrently.
+    [, this.db] = await Promise.all([
+      this.loadSettings(),
+      LocalDB.create(this.app.vault.getName()),
+    ]);
     this.s3Client = new S3ClientWrapper(this.settings.s3);
 
     this.addSettingTab(new S3GitSyncSettingTab(this.app, this));

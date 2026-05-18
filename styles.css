@@ -639,15 +639,15 @@
   background: rgba(var(--color-green-rgb), 0.06);
 }
 
-/* Input with a validation error */
-.s3sync-input-error {
-  border-color: var(--color-red) !important;
+/* Input with a validation error — higher specificity avoids !important */
+.setting-item input.s3sync-input-error {
+  border-color: var(--color-red);
   outline: 1px solid var(--color-red);
 }
 
 /* Input with a non-fatal warning (e.g. HTTP endpoint) */
-.s3sync-input-warning {
-  border-color: var(--color-orange) !important;
+.setting-item input.s3sync-input-warning {
+  border-color: var(--color-orange);
   outline: 1px solid var(--color-orange);
 }
 
@@ -776,7 +776,7 @@
   top: 2px;
   right: 2px;
   background: var(--color-red);
-  color: #fff;
+  color: var(--text-on-accent);
   border-radius: 8px;
   font-size: 9px;
   font-weight: 700;

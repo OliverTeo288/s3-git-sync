@@ -5,6 +5,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
+    setupFiles: ["tests/setup.ts"],
     // Exclude integration tests — they need LocalStack running (use npm run test:integration)
     exclude: ["tests/integration/**", "node_modules/**"],
     coverage: {
@@ -18,8 +19,6 @@ export default defineConfig({
     alias: {
       // Stub the Obsidian browser API for unit tests
       obsidian: resolve(__dirname, "tests/__mocks__/obsidian.ts"),
-      // Stub localforage with an in-memory Map-backed implementation
-      localforage: resolve(__dirname, "tests/__mocks__/localforage.ts"),
     },
   },
 });

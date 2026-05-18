@@ -14,7 +14,9 @@ jobs:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # create releases, push version-bump commit
+      contents: write      # create releases, push version-bump commit
+      attestations: write  # generate artifact attestations
+      id-token: write      # required by attest-build-provenance
 
     steps:
       - name: Checkout (full history for tag inspection)
@@ -61,6 +63,14 @@ jobs:
 
       - name: Build production bundle
         run: node esbuild.config.mjs production
+
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2
+        with:
+          subject-path: |
+            main.js
+            styles.css
+            manifest.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3.0.0
