@@ -1,7 +1,7 @@
 {
   "id": "s-three-sync",
   "name": "S3 Sync",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "minAppVersion": "1.4.0",
   "description": "Sync your vault to S3 with a git-like workflow: preview changes, stage files, and commit to S3.",
   "author": "OliverTeo288",
