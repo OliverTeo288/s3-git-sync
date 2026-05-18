@@ -94,19 +94,30 @@ function readVaultStat(vault: Vault, key: string): { mtime: number; size: number
   return file instanceof TFile ? file.stat : null;
 }
 
-/** Build a SyncRecord, falling back through fresh stat → change snapshot → defaults. */
+/**
+ * Build a SyncRecord after a sync operation.
+ *
+ * `writeMtime` should be passed as `Date.now()` whenever the file was just
+ * written to disk by this sync (download / conflict→remote / keep-both upload).
+ * In those cases `change.localMtime` holds the *pre-write* mtime, which would
+ * cause the differ to see a false local change on the very next scan.
+ *
+ * For pure uploads the file was not touched locally, so `writeMtime` is
+ * omitted and the TFile stat (or `change.localMtime`) is the correct baseline.
+ */
 function buildSyncRecord(
   vault: Vault,
   change: FileChange,
   etag: string,
   fallbackSize: number,
+  writeMtime?: number,
 ): SyncRecord {
   const stat = readVaultStat(vault, change.key);
   return {
     key: change.key,
     s3Key: change.s3Key,
     etag,
-    localMtime: stat?.mtime ?? change.localMtime ?? Date.now(),
+    localMtime: writeMtime ?? stat?.mtime ?? change.localMtime ?? Date.now(),
     localSize: stat?.size ?? change.localSize ?? fallbackSize,
     syncTime: Date.now(),
   };
@@ -188,7 +199,9 @@ export async function executeSync(
         case "remote_modified": {
           progress(change.key, "downloading");
           const data = await downloadS3ToLocal(change, vault, s3);
-          newRecords.push(buildSyncRecord(vault, change, change.remoteEtag ?? "", data.byteLength));
+          // Capture mtime AFTER the write so it approximates the actual file mtime.
+          const downloadMtime = Date.now();
+          newRecords.push(buildSyncRecord(vault, change, change.remoteEtag ?? "", data.byteLength, downloadMtime));
           fileLog.push({ key: change.key, action: "downloaded" });
           stats.downloaded++;
           break;
@@ -224,13 +237,13 @@ export async function executeSync(
             progress(change.key, "downloading (conflict → remote wins)");
             await backupLocalIfExists(vault, change.key);
             const data = await downloadS3ToLocal(change, vault, s3);
-            newRecords.push(buildSyncRecord(vault, change, change.remoteEtag ?? "", data.byteLength));
+            const remoteWinsMtime = Date.now();
+            newRecords.push(buildSyncRecord(vault, change, change.remoteEtag ?? "", data.byteLength, remoteWinsMtime));
             stats.downloaded++;
 
           } else {
-            // "both" — for text files, append the remote content below the local
-            // content using git-style conflict markers so the user can resolve
-            // in-place in Obsidian. The merged file is then uploaded to S3.
+            // "both" — for text files, merge local and remote using Obsidian
+            // callout-block conflict markers so the user can resolve in-place.
             // For binary files there is no meaningful way to merge inline, so
             // local wins silently (same as "local" resolution).
             progress(change.key, "merging conflict (keep both)");
@@ -245,7 +258,8 @@ export async function executeSync(
             }
             // Upload (merged or unchanged) local file so S3 reflects the resolved state.
             const etag = await uploadLocalToS3(change, vault, s3);
-            newRecords.push(buildSyncRecord(vault, change, etag, 0));
+            const keepBothMtime = Date.now();
+            newRecords.push(buildSyncRecord(vault, change, etag, 0, keepBothMtime));
             stats.uploaded++;
           }
 

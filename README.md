@@ -1,4 +1,4 @@
-# S3 Git Sync
+# S3 Sync
 
 An [Obsidian](https://obsidian.md) plugin that syncs your vault to an S3 bucket using a **git-like workflow** — review every pending change before it goes anywhere, stage what you want, write a commit message, and push. No data leaves your vault without your review.
 
@@ -8,7 +8,7 @@ Works with AWS S3, MinIO, Cloudflare R2, Backblaze B2, and any S3-compatible obj
 
 ## What it does
 
-Most sync plugins treat your vault like a file-sync tool (Dropbox-style): changes happen automatically and you find out afterwards. S3 Git Sync works differently. Before anything is uploaded or downloaded, you see exactly what changed and why — the same mental model as `git status` and `git commit`.
+Most sync plugins treat your vault like a file-sync tool (Dropbox-style): changes happen automatically and you find out afterwards. S3 Sync works differently. Before anything is uploaded or downloaded, you see exactly what changed and why — the same mental model as `git status` and `git commit`.
 
 The plugin maintains a **local sync record** (a snapshot of what was last synced successfully). On every sync it runs a three-way diff between your current local files, the current S3 state, and that snapshot. This is what allows it to distinguish "I deleted this file intentionally" from "this file never existed on this side", and to detect true conflicts (both sides changed independently).
 
@@ -118,12 +118,12 @@ aws sso login --profile my-profile
 > Manual install until the plugin is listed in the community directory.
 
 1. Download the latest release from [GitHub Releases](https://github.com/OliverTeo288/s3sync/releases/latest).
-2. Copy `main.js`, `manifest.json`, and `styles.css` into `.obsidian/plugins/s3-git-sync/`.
+2. Copy `main.js`, `manifest.json`, and `styles.css` into `.obsidian/plugins/s-three-sync/`.
 3. Reload Obsidian and enable the plugin in **Settings → Community Plugins**.
 
 ### 4. Configure the plugin
 
-Open **Settings → S3 Git Sync** and fill in:
+Open **Settings → S3 Sync** and fill in:
 
 | Field | Description |
 |---|---|
@@ -143,7 +143,7 @@ Click **Test connection** to verify everything is wired up.
 
 ### View Changes (the main workflow)
 
-Click the ribbon icon, or run **S3 Git Sync: View changes (Git status)** from the command palette.
+Click the ribbon icon, or run **S3 Sync: View changes (Git status)** from the command palette.
 
 The modal shows all pending changes:
 
@@ -166,7 +166,7 @@ For text files in the Modified sections, click **▶ diff** to see a line-by-lin
 Syncs everything except conflicts without opening the modal. Useful as a hotkey for a quick catch-up sync.
 
 ```
-S3 Git Sync: Quick sync (all changes, default resolutions)
+S3 Sync: Quick sync (all changes, default resolutions)
 ```
 
 ### Push / Pull
@@ -174,8 +174,8 @@ S3 Git Sync: Quick sync (all changes, default resolutions)
 Directional sync for when you know which way you want to go.
 
 ```
-S3 Git Sync: Push only (local → S3)
-S3 Git Sync: Pull only (S3 → local)
+S3 Sync: Push only (local → S3)
+S3 Sync: Pull only (S3 → local)
 ```
 
 Conflicts in push are resolved local-wins. Conflicts in pull are resolved remote-wins.
@@ -183,7 +183,7 @@ Conflicts in push are resolved local-wins. Conflicts in pull are resolved remote
 ### Sync History
 
 ```
-S3 Git Sync: View sync history (Git log)
+S3 Sync: View sync history (Git log)
 ```
 
 Shows the last 100 sync operations with timestamps, optional messages, and per-sync stats (↑ uploaded, ↓ downloaded, ✕ deleted, ⚠ conflicts, ⛔ errors).
@@ -191,7 +191,7 @@ Shows the last 100 sync operations with timestamps, optional messages, and per-s
 ### Version history
 
 ```
-S3 Git Sync: View version history for active file
+S3 Sync: View version history for active file
 ```
 
 Opens a list of all S3 versions for the currently active file. For text files, click **Preview** to read the content before restoring. Click **Restore** to write that version back to your local vault. Requires S3 versioning to be enabled on the bucket.
@@ -199,7 +199,7 @@ Opens a list of all S3 versions for the currently active file. For text files, c
 ### Export backup
 
 ```
-S3 Git Sync: Export S3 backup (download all files as ZIP)
+S3 Sync: Export S3 backup (download all files as ZIP)
 ```
 
 Downloads every file currently in S3 and packages them into a ZIP with the vault's folder structure intact. Useful for point-in-time backups before major changes.
@@ -408,7 +408,7 @@ npm run test:coverage
 OBSIDIAN_VAULT=~/Documents/MyVault ./scripts/deploy-local.sh
 ```
 
-Then reload the plugin in Obsidian: **Settings → Community Plugins → S3 Git Sync → Reload**.
+Then reload the plugin in Obsidian: **Settings → Community Plugins → S3 Sync → Reload**.
 
 ### Running tests
 

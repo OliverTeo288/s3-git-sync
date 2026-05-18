@@ -7,17 +7,60 @@ type Store = ReturnType<typeof localforage.createInstance>;
 
 const makeRecordsStore = (vaultName: string) =>
   localforage.createInstance({
-    name: `s3-git-sync-${vaultName}`,
+    name: `s-three-sync-${vaultName}`,
     storeName: "sync-records",
     description: "Per-file sync state for 3-way diff",
   });
 
 const makeHistoryStore = (vaultName: string) =>
   localforage.createInstance({
-    name: `s3-git-sync-${vaultName}`,
+    name: `s-three-sync-${vaultName}`,
     storeName: "sync-history",
     description: "Sync history log",
   });
+
+// ─── Legacy migration ─────────────────────────────────────────────────────────
+
+/**
+ * One-time migration: copy records from the old `s3-git-sync-*` IndexedDB
+ * stores (used before the plugin was renamed to s-three-sync) into the current
+ * `s-three-sync-*` stores.  Only runs when the new store is empty — i.e. on
+ * the first load after an upgrade.  After copying, the old stores are cleared
+ * so the migration never runs again.
+ */
+async function migrateFromLegacyStores(
+  vaultName: string,
+  newRecords: Store,
+  newHistory: Store,
+): Promise<void> {
+  const newRecordCount = await newRecords.length();
+  if (newRecordCount > 0) return; // already populated — nothing to do
+
+  const legacyRecords = localforage.createInstance({
+    name: `s3-git-sync-${vaultName}`,
+    storeName: "sync-records",
+  });
+  const legacyHistory = localforage.createInstance({
+    name: `s3-git-sync-${vaultName}`,
+    storeName: "sync-history",
+  });
+
+  const legacyCount = await legacyRecords.length();
+  if (legacyCount === 0) return; // no legacy data to migrate
+
+  // Copy records
+  await legacyRecords.iterate<SyncRecord, void>(async (value, key) => {
+    await newRecords.setItem(key, value);
+  });
+
+  // Copy history
+  await legacyHistory.iterate<SyncHistoryEntry, void>(async (value, key) => {
+    await newHistory.setItem(key, value);
+  });
+
+  // Clear legacy stores so this branch is never entered again
+  await Promise.all([legacyRecords.clear(), legacyHistory.clear()]);
+}
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -28,6 +71,11 @@ export class LocalDB {
   constructor(vaultName: string) {
     this.records = makeRecordsStore(vaultName);
     this.history = makeHistoryStore(vaultName);
+  }
+
+  /** Must be awaited once after construction before any reads/writes. */
+  async init(vaultName: string): Promise<void> {
+    await migrateFromLegacyStores(vaultName, this.records, this.history);
   }
 
   // ── Sync Records ────────────────────────────────────────────────────────────

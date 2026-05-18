@@ -31,6 +31,7 @@ export default class S3GitSyncPlugin extends Plugin {
     await this.loadSettings();
 
     this.db = new LocalDB(this.app.vault.getName());
+    await this.db.init(this.app.vault.getName());
     this.s3Client = new S3ClientWrapper(this.settings.s3);
 
     this.addSettingTab(new S3GitSyncSettingTab(this.app, this));
@@ -157,7 +158,7 @@ export default class S3GitSyncPlugin extends Plugin {
   exportSettings() {
     const { s3AccessKeyID: _id, s3SecretAccessKey: _secret, ...safeS3 } = this.settings.s3;
     const json = JSON.stringify({ ...this.settings, s3: safeS3 }, null, 2);
-    triggerBlobDownload(json, `s3-git-sync-settings-${new Date().toISOString().slice(0, 10)}.json`, "application/json");
+    triggerBlobDownload(json, `s-three-sync-settings-${new Date().toISOString().slice(0, 10)}.json`, "application/json");
     new Notice("Settings exported (credentials excluded).", 4000);
   }
 

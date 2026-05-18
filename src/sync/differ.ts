@@ -246,17 +246,58 @@ export async function computeChanges(
           remoteEtag: remote.etag,
         });
       } else if (local && remote) {
-        // Both exist but we've never synced — treat as conflict
-        changes.push({
-          key,
-          s3Key,
-          changeType: "conflict",
-          localMtime: local.stat.mtime,
-          localSize: local.stat.size,
-          remoteMtime: remote.lastModified,
-          remoteSize: remote.size,
-          remoteEtag: remote.etag,
-        });
+        // Both exist but we've never synced this key before.
+        //
+        // "Conflict" requires knowing both sides diverged from a common baseline.
+        // Without a prior sync record there is no baseline — we cannot say which
+        // side "changed".  The most practical definition: if both sides are the
+        // same file, silently establish the sync record (no user action needed);
+        // only flag a real conflict if the content is provably different.
+        //
+        // Size equality is the primary signal.  MD5 is used as a hard-veto only
+        // when the ETag is a standard single-part MD5 (32 lowercase hex chars)
+        // AND the crypto module is available — i.e. we can be confident the hash
+        // is comparable.  SSE-KMS buckets produce ETags that are MD5s of the
+        // *ciphertext*, not plaintext, so they look like regular 32-hex strings
+        // but would never match the local MD5.  We deliberately skip the veto in
+        // that case so SSE-KMS users don't get 100+ false conflicts on first load.
+        let alreadyInSync = local.stat.size === remote.size;
+        if (alreadyInSync && !isMultipartEtag(remote.etag)) {
+          const data = await vault.adapter.readBinary(local.path);
+          const md5 = await computeMd5Hex(data);
+          // Only veto when we are confident the ETag IS a plaintext MD5:
+          //   - md5 is non-null (crypto available — desktop only)
+          //   - ETag matches the standard 32-char lowercase hex pattern
+          //   - AND the hash doesn't match → content definitely differs
+          if (md5 !== null && /^[0-9a-f]{32}$/.test(remote.etag) && md5 !== remote.etag) {
+            alreadyInSync = false;
+          }
+        }
+
+        if (alreadyInSync) {
+          // Establish the baseline record so subsequent diffs have a reference point.
+          // We store the remote ETag (S3 is the canonical source for new installs)
+          // and the current local mtime/size.
+          await db.upsertSyncRecord({
+            key,
+            s3Key,
+            etag: remote.etag,
+            localMtime: local.stat.mtime,
+            localSize: local.stat.size,
+            syncTime: Date.now(),
+          });
+        } else {
+          changes.push({
+            key,
+            s3Key,
+            changeType: "conflict",
+            localMtime: local.stat.mtime,
+            localSize: local.stat.size,
+            remoteMtime: remote.lastModified,
+            remoteSize: remote.size,
+            remoteEtag: remote.etag,
+          });
+        }
       }
     }
   }

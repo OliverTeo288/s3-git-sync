@@ -300,7 +300,7 @@ export class S3GitSyncSettingTab extends PluginSettingTab {
     const note = container.createDiv("s3sync-settings-auth-note");
     note.createEl("p", {
       text:
-        `Credentials are saved in ${configDir}/plugins/s3-git-sync/data.json. ` +
+        `Credentials are saved in ${configDir}/plugins/s-three-sync/data.json. ` +
         "A .gitignore entry for data.json is automatically created to prevent accidental commits. " +
         "Avoid this method on shared or multi-user machines.",
     });

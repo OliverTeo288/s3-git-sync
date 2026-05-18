@@ -1,5 +1,5 @@
 {
-  "name": "s3-git-sync",
+  "name": "s-three-sync",
   "version": "1.2.3",
   "description": "Obsidian plugin: sync vault to S3 with a git-like workflow",
   "scripts": {

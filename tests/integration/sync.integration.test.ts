@@ -25,7 +25,7 @@ import { DEFAULT_SETTINGS } from "../../src/types";
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const ENDPOINT = process.env.LOCALSTACK_ENDPOINT ?? "http://localhost:4566";
-const BUCKET   = `s3-git-sync-integration-${Date.now()}`;
+const BUCKET   = `s-three-sync-integration-${Date.now()}`;
 const REGION   = "us-east-1";
 
 const S3_CFG: S3Config = {
